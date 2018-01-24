@@ -6,6 +6,7 @@ import bodyParser from 'body-parser';
 import config from './config.json';
 import {exec} from 'shelljs';
 import async from 'async';
+import {DepGraph} from 'dependency-graph';
 
 const app = express();
 app.server = http.createServer(app);
@@ -111,6 +112,8 @@ app.get('/processes', (req, res) => {
   });
 });
 
+// dependencies AND reverse dependencies
+
 function parseProcfs(pid, cb) {
   let cmdline, exe, bin, entrypointCmd, entrypointArgs;
 
@@ -147,7 +150,7 @@ function parseProcfs(pid, cb) {
         entrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
         callback(null);
       });
-    },
+    }
   ],
   function(err) {
     if (err) {
@@ -158,12 +161,183 @@ function parseProcfs(pid, cb) {
   });
 }
 
+// shell(`type ${exe}`, (err, stdout) => {
+//   if (err) {
+//     return callback(err);
+//   }
+
+//   const lines = splitTrimFilter(stdout);
+
+//   if(lines.length !== 1) {
+//     return callback({
+//       err: `Not one package from ${exe}`
+//     });
+//   }
+
+//   corePackage = head(lines[0], ' is ');
+//   callback(null);
+// });
+
+// function splitTrimFilter(str) {
+//   return str.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+// }
+
+function remove(str, toRemove) {
+  var final = str;
+  while (final.indexOf(toRemove) > -1) {
+    final = final.replace(toRemove,'');
+  }
+  return final;
+}
+
+function parseDependencies(aptOutput) {
+  return aptOutput
+    .split('\n')
+    .filter(l => l.indexOf('->') > -1)
+    .map(l => {
+      const pair = l.split(' -> ');
+      if (pair.length !== 2) {
+        throw `Error parsing dependency pair ${pair}`;
+      }
+      const [pkgStr, depStr] = pair;
+      const pkg = head(remove(pkgStr, `"`), '[');
+      const dep = remove(head(remove(depStr, `"`), '['),';');
+      return {pkg, dep};
+    });
+}
+
+function getPackagesSequence(exe, cb) {
+  const dependencyGraph = new DepGraph();
+  let corePackages;
+  var buildDeps = [];
+  var reverseDeps = [];
+  var reverseBuildDeps = [];
+
+  async.series([
+    function(callback) {
+      shell(`dpkg -S ${exe}`, (err, stdout) => {
+        if (err) {
+          return callback(err);
+        }
+
+        corePackages = Array.from(
+          /*eslint-disable */
+          new Set(
+          /*eslint-enable */
+            stdout
+              .split('\n')
+              .filter(i => i.indexOf(':') > -1)
+              .map(i => i.split(':')[0])
+          )
+        );
+        callback(null);
+      });
+    },
+    function(callback) {
+      const buildDepsBuilders = corePackages.map(corePackage => function(asyncCallback) {
+        shell(`apt-rdepends ${corePackage} --build-depends --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          buildDeps = buildDeps.concat(parseDependencies(stdout));
+          asyncCallback(null);
+        });
+      });
+
+      async.series(buildDepsBuilders, function(err) {
+        if (err) {
+          return callback(err);
+        }
+        callback(null);
+      });
+    },
+    function(callback) {
+      const reverseDepsBuilders = corePackages.map(corePackage => function(asyncCallback) {
+        shell(`apt-rdepends ${corePackage} -r --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          reverseDeps = reverseDeps.concat(parseDependencies(stdout));
+          asyncCallback(null);
+        });
+      });
+
+      async.series(reverseDepsBuilders, function(err) {
+        if (err) {
+          return callback(err);
+        }
+        callback(null);
+      });
+    },
+    function(callback) {
+      const reverseBuildDepsBuilders = reverseDeps.
+        map(pair => function(asyncCallback) {
+          shell(`apt-rdepends ${pair.pkg} --build-depends --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+            if (err) {
+              return asyncCallback(err);
+            }
+            reverseBuildDeps = reverseBuildDeps.concat(parseDependencies(stdout));
+            asyncCallback(null);
+          });
+        });
+
+      async.series(reverseBuildDepsBuilders, function(err) {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      buildDeps
+        .concat(reverseBuildDeps)
+        .forEach(({pkg, dep}) => {
+          dependencyGraph.addNode(pkg);
+          dependencyGraph.addNode(dep);
+          dependencyGraph.addDependency(pkg,dep);
+
+          try {
+            dependencyGraph.overallOrder();
+          } catch (err) {
+            if (err.toString().indexOf('Dependency Cycle Found') > -1) {
+              dependencyGraph.removeDependency(pkg,dep);
+            } else {
+              throw (err);
+            }
+          }
+        });
+
+      callback(null);
+    }
+  ],
+  function(err) {
+    if (err) {
+      return cb(err);
+    }
+
+    const packagesSequence = dependencyGraph.overallOrder();
+    cb(null, {packagesSequence, corePackages, buildDeps, reverseDeps, reverseBuildDeps});
+  });
+}
+
 app.get('/processMetadata/:pid', (req, res) => {
   parseProcfs(req.params.pid, (err, metadata) => {
     if (err) {
       return res.status(404).json(err);
     }
     res.json(metadata);
+  });
+});
+
+app.get('/processPackages/:pid', (req, res) => {
+  getPackagesSequence('/usr/sbin/nginx', (err, deps) => {
+    if (err) {
+      return res.status(404).json(err);
+    }
+    res.json(deps);
   });
 });
 
