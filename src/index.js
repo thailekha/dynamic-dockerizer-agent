@@ -182,6 +182,17 @@ function parseProcfs(pid, cb) {
 //   return str.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 // }
 
+// function execInContainer(cmd, image, cb) {
+//   //docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c ""
+//   shell(`docker run -i --rm --entrypoint /bin/bash ${image} -c "${cmd}"`, (err, stdout) => {
+//     if(err) {
+//       return cb(err);
+//     }
+
+//     cb(null, stdout);
+//   });
+// }
+
 function remove(str, toRemove) {
   var final = str;
   while (final.indexOf(toRemove) > -1) {
@@ -189,6 +200,8 @@ function remove(str, toRemove) {
   }
   return final;
 }
+
+
 
 function parseDependencies(aptOutput) {
   return aptOutput
@@ -212,6 +225,7 @@ function getPackagesSequence(exe, cb) {
   var buildDeps = [];
   var reverseDeps = [];
   var reverseBuildDeps = [];
+  const packagesSequence = [];
 
   async.series([
     function(callback) {
@@ -311,6 +325,35 @@ function getPackagesSequence(exe, cb) {
         });
 
       callback(null);
+    },
+    function(callback) {
+      const onlyNotInstalledInBaseImage = dependencyGraph
+        .overallOrder()
+        .map(dep => function(asyncCallback) {
+          exec(`docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c "dpkg -L ${dep}"`, (code, stdout, stderr) => {
+            if (code === 1) {
+              packagesSequence.push(dep);
+              return asyncCallback(null);
+            }
+
+            if ( !(code === 0 || code === 1)) {
+              return asyncCallback({
+                command: `docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c "dpkg -L ${dep}"`,
+                stderr: stderr
+              });
+            }
+
+            asyncCallback(null);
+          });
+        });
+
+      async.series(onlyNotInstalledInBaseImage, function(err) {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
     }
   ],
   function(err) {
@@ -318,26 +361,40 @@ function getPackagesSequence(exe, cb) {
       return cb(err);
     }
 
-    const packagesSequence = dependencyGraph.overallOrder();
-    cb(null, {packagesSequence, corePackages, buildDeps, reverseDeps, reverseBuildDeps});
+    cb(null, packagesSequence);
   });
 }
 
 app.get('/processMetadata/:pid', (req, res) => {
-  parseProcfs(req.params.pid, (err, metadata) => {
+  let metadata;
+
+  async.series([
+    function(callback) {
+      parseProcfs(req.params.pid, (err, meta) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata = meta;
+        callback(null);
+      });
+    },
+    function(callback) {
+      getPackagesSequence(metadata.exe, (err, packagesSequence) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata.packagesSequence = packagesSequence;
+        callback(null);
+      });
+    }
+  ],
+  function(err) {
     if (err) {
       return res.status(404).json(err);
     }
     res.json(metadata);
-  });
-});
-
-app.get('/processPackages/:pid', (req, res) => {
-  getPackagesSequence('/usr/sbin/nginx', (err, deps) => {
-    if (err) {
-      return res.status(404).json(err);
-    }
-    res.json(deps);
   });
 });
 
