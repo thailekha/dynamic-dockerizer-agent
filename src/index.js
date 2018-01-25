@@ -9,6 +9,8 @@ import async from 'async';
 import {DepGraph} from 'dependency-graph';
 import dockerfileGen from 'dockerfile-generator';
 import fs from 'fs';
+// import Docker from 'dockerode';
+// import {StringDecoder} from 'string_decoder';
 
 const app = express();
 app.server = http.createServer(app);
@@ -419,6 +421,7 @@ function mkdir(paths, cb) {
 
 function convert(pid, cb) {
   let port, program, metadata, buildPath, packagePath, workingDirectoryPath, debFiles, dockerfile;
+  var pushResponse = '';
 
   async.series([
     function(callback) {
@@ -560,7 +563,7 @@ function convert(pid, cb) {
       });
     },
     function(callback) {
-      shell(`cd ${buildPath} && docker build -t ${program} .`, err => {
+      shell(`cd ${buildPath} && docker build -t thailekha/${program} .`, err => {
         if (err) {
           return callback(err);
         }
@@ -574,7 +577,7 @@ function convert(pid, cb) {
       return cb(err);
     }
 
-    cb(null, dockerfile);
+    cb(null, {dockerfile, pushResponse});
   });
 }
 
