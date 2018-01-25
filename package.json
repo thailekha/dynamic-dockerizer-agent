@@ -113,6 +113,7 @@
     "compression": "^1.5.2",
     "cors": "^2.7.1",
     "dependency-graph": "^0.7.0",
+    "dockerfile-generator": "^2.1.1",
     "express": "^4.13.3",
     "morgan": "^1.8.0",
     "resource-router-middleware": "^0.6.0",

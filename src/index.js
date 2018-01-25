@@ -7,6 +7,8 @@ import config from './config.json';
 import {exec} from 'shelljs';
 import async from 'async';
 import {DepGraph} from 'dependency-graph';
+import dockerfileGen from 'dockerfile-generator';
+import fs from 'fs';
 
 const app = express();
 app.server = http.createServer(app);
@@ -26,6 +28,10 @@ app.use(bodyParser.json({
 app.server.listen(process.env.PORT || config.port, () => {
   console.log(`Started on port ${app.server.address().port}`);
 });
+
+const APP_SPACE = '/tmp/dd-agent';
+const IGNORED_PORTS = ['22','111', `${app.server.address().port}`];
+const IGNORED_PROGRAMS = ['rpc.statd'];
 
 function hasAll(string, strings) {
   return strings.filter(s => string.indexOf(s) > -1).length === strings.length;
@@ -54,17 +60,14 @@ function tail(string, delimitier) {
 function shell(command, cb) {
   exec(command, (code, stdout, stderr) => {
     if (code !== 0) {
-      return cb({
-        command: command,
-        stderr: stderr
-      });
+      return cb({command, code, stderr});
     }
 
     cb(null, stdout);
   });
 }
 
-function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, cb) {
+function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
   exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', (code, stdout, stderr) => {
     // if terraform command time out, no response is returned by express, why?
     if (code !== 0) {
@@ -94,17 +97,15 @@ function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, cb) {
         };
       })
       .filter(i => IGNORED_PORTS.indexOf(i.port) < 0 && IGNORED_PROGRAMS.indexOf(i.program) < 0)
-      .reduce(uniqueNetstatItems, []);
+      .reduce(uniqueNetstatItems, [])
+      .filter(i => (processId ? (i.pid === processId) : true));
 
     cb(null, {processes});
   });
 }
 
 app.get('/processes', (req, res) => {
-  const IGNORED_PORTS = ['22','111', `${app.server.address().port}`];
-  const IGNORED_PROGRAMS = ['rpc.statd'];
-
-  parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, (err, processes) => {
+  parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, null, (err, processes) => {
     if (err) {
       return res.status(404).json(err);
     }
@@ -178,10 +179,6 @@ function parseProcfs(pid, cb) {
 //   callback(null);
 // });
 
-// function splitTrimFilter(str) {
-//   return str.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-// }
-
 // function execInContainer(cmd, image, cb) {
 //   //docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c ""
 //   shell(`docker run -i --rm --entrypoint /bin/bash ${image} -c "${cmd}"`, (err, stdout) => {
@@ -201,7 +198,9 @@ function remove(str, toRemove) {
   return final;
 }
 
-
+function splitTrimFilter(str) {
+  return str.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+}
 
 function parseDependencies(aptOutput) {
   return aptOutput
@@ -365,12 +364,12 @@ function getPackagesSequence(exe, cb) {
   });
 }
 
-app.get('/processMetadata/:pid', (req, res) => {
+function getProcessMetadata(pid, cb) {
   let metadata;
 
   async.series([
     function(callback) {
-      parseProcfs(req.params.pid, (err, meta) => {
+      parseProcfs(pid, (err, meta) => {
         if (err) {
           return callback(err);
         }
@@ -392,9 +391,208 @@ app.get('/processMetadata/:pid', (req, res) => {
   ],
   function(err) {
     if (err) {
+      return cb(err);
+    }
+    cb(null, metadata);
+  });
+}
+
+function mkdir(paths, cb) {
+  const pathsBuilders = paths.map(path => function(asyncCallback) {
+    shell(`mkdir -p ${path}`, err => {
+      if (err) {
+        return asyncCallback(err);
+      }
+
+      asyncCallback(null);
+    });
+  });
+
+  async.series(pathsBuilders, function(err) {
+    if (err) {
+      return cb(err);
+    }
+
+    cb(null);
+  });
+}
+
+function convert(pid, cb) {
+  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, debFiles, dockerfile;
+
+  async.series([
+    function(callback) {
+      parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, pid, (err, {processes}) => {
+        if (err) {
+          return callback(err);
+        }
+
+        if (processes.length !== 1) {
+          return callback(`Error finding process with pid ${pid}`);
+        }
+
+        port = processes[0].port;
+        program = processes[0].program;
+        buildPath = `${APP_SPACE}/${program}`;
+        packagePath = `${buildPath}/packages`;
+        workingDirectoryPath = `${buildPath}/workingDirectory`;
+        callback(null);
+      });
+    },
+    function(callback) {
+      getProcessMetadata(pid, (err, meta) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata = meta;
+        callback(null);
+      });
+    },
+    function(callback) {
+      mkdir([buildPath, packagePath, workingDirectoryPath], err => {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      const runScriptContent = `#!/bin/bash\\n${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')} && while ps -C ${metadata.entrypointCmd}; do echo -n stopping process from going background ... && sleep 3; done`;
+
+      shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, err => {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      const repackers = metadata
+        .packagesSequence
+        .map(p => function(asyncCallback) {
+          shell(`cd ${packagePath} && dpkg-repack ${p}`, err => {
+            if (err) {
+              return asyncCallback(err);
+            }
+
+            asyncCallback(null);
+          });
+        });
+
+      async.series(repackers, err => {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cd ${packagePath} && ls | grep .deb`, (err, stdout) => {
+        if (err) {
+          if (err.code && err.code === 1) {
+            return callback(null);
+          }
+          return callback(err);
+        }
+
+        debFiles = splitTrimFilter(stdout);
+        callback(null);
+      });
+    },
+    function(callback) {
+      const copyInstructions = [
+        {
+          'src': 'workingDirectory',
+          'dst': '/workingDirectory'
+        },
+        {
+          'src': 'packages',
+          'dst': '/packages'
+        },
+        {
+          'src': 'workingDirectory/cmdScript.sh',
+          'dst': '/workingDirectory'
+        }
+      ];
+
+      const runInstructions = [{
+        'command': 'chmod',
+        'args': ['+x', '/workingDirectory/cmdScript.sh']
+      }]
+        .concat(debFiles
+          .map(p => ({
+            'command': 'dpkg',
+            'args': ['-i','--force-depends',`/packages/${p}`,] //dependency graph took care of dependencies
+          })));
+
+      const dockerfileContent = {
+        'imagename': 'ubuntu',
+        'imageversion': '14.04',
+        'copy': copyInstructions,
+        'run': runInstructions,
+        'workdir': 'workingDirectory',
+        'expose': [port],
+        'cmd': {
+          'command': './cmdScript.sh'
+        }
+      };
+
+      dockerfileGen.generate(JSON.stringify(dockerfileContent), (err,result) => {
+        if (err) {
+          return callback(err);
+        }
+
+        dockerfile = result;
+        callback(null);
+      });
+    },
+    function(callback) {
+      fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cd ${buildPath} && docker build -t ${program} .`, err => {
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    }
+  ],
+  function(err) {
+    if (err) {
+      return cb(err);
+    }
+
+    cb(null, dockerfile);
+  });
+}
+
+app.get('/processMetadata/:pid', (req, res) => {
+  getProcessMetadata(req.params.pid, (err, metadata) => {
+    if (err) {
       return res.status(404).json(err);
     }
     res.json(metadata);
+  });
+});
+
+app.get('/convert/:pid', (req, res) => {
+  convert(req.params.pid, (err, dockerfile) => {
+    if (err) {
+      return res.status(404).json(err);
+    }
+    res.json(dockerfile);
   });
 });
 
