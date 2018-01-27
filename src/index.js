@@ -1,10 +1,10 @@
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
-import morgan from 'morgan';
+// import morgan from 'morgan';
 import bodyParser from 'body-parser';
 import config from './config.json';
-import {exec} from 'shelljs';
+import sh from 'shelljs';
 import async from 'async';
 import {DepGraph} from 'dependency-graph';
 import dockerfileGen from 'dockerfile-generator';
@@ -12,11 +12,35 @@ import fs from 'fs';
 // import Docker from 'dockerode';
 // import {StringDecoder} from 'string_decoder';
 
+// sh.config.silent = true;
+const exec = sh.exec;
+
+const VERBOSE = 2;
+const DEBUG = VERBOSE >= 2;
+const INFO = VERBOSE >= 1;
+const logger = {
+  overview: function(msg, extraCondition = true) {
+    if (extraCondition) {
+      console.log(`===> OVERVIEW: ${msg}`);
+    }
+  },
+  info: function(msg, extraCondition = true) {
+    if (INFO && extraCondition) {
+      console.log(`===> INFO: ${msg}`);
+    }
+  },
+  debug: function(msg, extraCondition = true) {
+    if (DEBUG && extraCondition) {
+      console.log(`===> DEBUG: ${msg}`);
+    }
+  }
+};
+
 const app = express();
 app.server = http.createServer(app);
 
 // logger
-app.use(morgan('dev'));
+// app.use(morgan('dev'));
 
 // 3rd party middleware
 app.use(cors({
@@ -60,7 +84,11 @@ function tail(string, delimitier) {
 }
 
 function shell(command, cb) {
-  exec(command, (code, stdout, stderr) => {
+  exec(command, {silent:true}, (code, stdout, stderr) => {
+    logger.info(command);
+    logger.debug(`stdout: ${stdout}`);
+    logger.debug(`stderr: ${stderr}`);
+
     if (code !== 0) {
       return cb({command, code, stderr});
     }
@@ -118,7 +146,7 @@ app.get('/processes', (req, res) => {
 // dependencies AND reverse dependencies
 
 function parseProcfs(pid, cb) {
-  let cmdline, exe, bin, entrypointCmd, entrypointArgs;
+  let cmdline, exe, bin, entrypointCmd, entrypointArgs, cwd;
 
   async.series([
     function(callback) {
@@ -153,6 +181,16 @@ function parseProcfs(pid, cb) {
         entrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
         callback(null);
       });
+    },
+    function(callback) {
+      shell(`readlink -f /proc/${pid}/cwd`, (err, stdout) => {
+        if (err) {
+          return callback(err);
+        }
+
+        cwd = head(stdout, '\n');
+        callback(null);
+      });
     }
   ],
   function(err) {
@@ -160,7 +198,7 @@ function parseProcfs(pid, cb) {
       return cb(err);
     }
 
-    cb(null, {cmdline, exe, bin, entrypointCmd, entrypointArgs});
+    cb(null, {cmdline, exe, bin, entrypointCmd, entrypointArgs, cwd});
   });
 }
 
@@ -250,7 +288,7 @@ function getPackagesSequence(exe, cb) {
     },
     function(callback) {
       const buildDepsBuilders = corePackages.map(corePackage => function(asyncCallback) {
-        shell(`apt-rdepends ${corePackage} --build-depends --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+        shell(`apt-rdepends ${corePackage} --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
           if (err) {
             return asyncCallback(err);
           }
@@ -363,6 +401,140 @@ function getPackagesSequence(exe, cb) {
     }
 
     cb(null, packagesSequence);
+  });
+}
+
+function getOpennedFiles(pid, cb) {
+  let procfs, opennedFiles;
+  const stracePath = `${APP_SPACE}/strace`;
+
+  async.series([
+    // function(callback) {
+    //   parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, pid, (err, {processes}) => {
+    //     if (err) {
+    //       return callback(err);
+    //     }
+
+    //     if (processes.length !== 1) {
+    //       return callback(`Error finding process with pid ${pid}`);
+    //     }
+
+    //     stracePath = `${APP_SPACE}/${processes[0].program}/strace`;
+    //     callback(null);
+    //   });
+    // },
+    function(callback) {
+      parseProcfs(pid, (err, proc) => {
+        logger.info('getOpennedFiles: parseProcfs');
+        if (err) {
+          return callback(err);
+        }
+
+        procfs = proc;
+        callback(null);
+      });
+    },
+    function(callback) {
+      mkdir([stracePath], err => {
+        logger.info('getOpennedFiles: mkdir');
+        if (err) {
+          return callback(err);
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      // kill process
+      async.someSeries([`service ${procfs.bin} stop`,`kill ${pid}`,`kill -9 ${pid}`], function(cmd, asyncCallback) {
+        shell(cmd, err => {
+          if (err) {
+            if (err.code === 1) {
+              return asyncCallback(null, false);
+            } else {
+              return asyncCallback(err);
+            }
+          }
+
+          asyncCallback(null, true);
+        });
+      }, function(err, processStopped) {
+        logger.info('getOpennedFiles: kill process');
+        if (err) {
+          return callback(err);
+        }
+
+        callback(processStopped ? null : 'Cannot stop process');
+      });
+    },
+    function(callback) {
+      // start strace
+      const command = [
+        `cd ${procfs.cwd} &&`,
+        `strace -fe open ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')}`,
+        // `&> ${stracePath}/${procfs.bin}.log`].join(' '),
+      ].join(' ');
+      exec(command,
+        (code, stdout, stderr) => {
+          logger.info('getOpennedFiles: start strace');
+          if (code !== 0) {
+            return callback({command, code, stderr});
+          }
+
+          opennedFiles = stderr
+            .split(`\n`)
+            .map(line => line.split(`"`))
+            .filter(line => line.length > 0 && line[0] === 'open(')
+            .map(line => line[1]);
+          callback(null);
+        });
+    },
+    function(callback) {
+      shell(`ps -C strace`, err => {
+        logger.info('getOpennedFiles: check strace');
+        if (err) {
+          if (err.code === 1) {
+            return callback(null);
+          } else {
+            return callback(err);
+          }
+        }
+
+        // start strace killer
+        const straceKiller = setInterval(() => {
+          //kill if see any strace process in sleep state
+          shell(`ps -C strace -o state= | grep S`, err => {
+            logger.info('getOpennedFiles: check and kill strace');
+            if (err && err.code === 1) {
+              console.log('interval');
+              return;
+            }
+
+            console.log('Killing strace');
+            clearInterval(straceKiller);
+            callback(err ? err : null);
+          });
+        }, 2000);
+      });
+    },
+    // function(callback) {
+    //   shell(`cat ${stracePath}/${procfs.bin}.log | grep -v '= -1' | grep 'open(' | cut -d\\" -f2`, (err, stdout) => {
+    //     logger.info('getOpennedFiles: cat log');
+    //     if (err) {
+    //       return callback(err);
+    //     }
+
+    //     opennedFiles = splitTrimFilter(stdout);
+    //     callback(null);
+    //   });
+    // },
+  ],
+  function(err) {
+    logger.info('getOpennedFiles: done');
+    if (err) {
+      return cb(err);
+    }
+    cb(null, {opennedFiles});
   });
 }
 
@@ -563,7 +735,8 @@ function convert(pid, cb) {
       });
     },
     function(callback) {
-      shell(`cd ${buildPath} && docker build -t thailekha/${program} .`, err => {
+      // issue: nginx: , causing docker tagging to fail
+      shell(`cd ${buildPath} && docker build -t thailekha/${program.replace(/\W/g, '')} .`, err => {
         if (err) {
           return callback(err);
         }
@@ -596,6 +769,15 @@ app.get('/convert/:pid', (req, res) => {
       return res.status(404).json(err);
     }
     res.json(dockerfile);
+  });
+});
+
+app.get('/opennedfiles/:pid', (req, res) => {
+  getOpennedFiles(req.params.pid, (err, opennedfiles) => {
+    if (err) {
+      return res.status(404).json(err);
+    }
+    res.json(opennedfiles);
   });
 });
 
