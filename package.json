@@ -1,7 +1,7 @@
 {
-  "name": "express-es6-rest-api",
-  "version": "0.3.0",
-  "description": "Starter project for an ES6 RESTful Express API",
+  "name": "dynamic-dockerizer-agent",
+  "version": "0.0.1",
+  "description": "Agent component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
     "dev": "nodemon -L -w src --exec \"babel-node src --presets es2015,stage-0\"",
@@ -13,7 +13,7 @@
   "eslintConfig": {
     "extends": "eslint:recommended",
     "parserOptions": {
-      "ecmaVersion": 7,
+      "ecmaVersion": 6,
       "sourceType": "module"
     },
     "env": {
@@ -104,20 +104,18 @@
       "require-yield": "error"
     }
   },
-  "repository": "developit/express-es6-rest-api",
-  "author": "Jason Miller <jason@developit.ca>",
+  "repository": "thailekha/dynamic-dockerizer-agent",
+  "author": "Thai Le <thailekha@yahoo.com>",
   "license": "MIT",
   "dependencies": {
     "async": "^2.6.0",
     "body-parser": "^1.13.3",
-    "compression": "^1.5.2",
     "cors": "^2.7.1",
     "dependency-graph": "^0.7.0",
     "dockerfile-generator": "^2.1.1",
     "dockerode": "^2.5.3",
     "express": "^4.13.3",
     "morgan": "^1.8.0",
-    "resource-router-middleware": "^0.6.0",
     "shelljs": "^0.8.1"
   },
   "devDependencies": {
