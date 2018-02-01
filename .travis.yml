@@ -1,17 +1,49 @@
-stages:
-  - name: Unit test
-    if: type IN (push)
+dd_common: &common
+  if: type IN (push)
+  sudo: required
+  dist: trusty
+  language: bash
+  cache:
+    directories:
+    - node_modules
+  before_install:
+  - sudo apt-get -y install git dpkg-repack tree build-essential apt-rdepends
+  - curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
+  - sudo apt-get install -y nodejs
+  - sudo npm install -g yarn
+  before_script:
+  - npm run build
 jobs:
   include:
-    - stage: Unit test
-      language: node_js
-      node_js: 6
-      cache:
-        directories:
-        - node_modules
-      before_install:
-      - npm i -g yarn
+    # =======================
+    # Unit tests (start)
+    # =======================
+    -
+      <<: *common
       install:
       - yarn install
       script:
       - npm run test
+    # =======================
+    # Unit tests (end)
+    # =======================
+    # =======================
+    # E2E tests (start)
+    # =======================
+    -
+      <<: *common
+      install:
+      - sudo apt-get install nginx
+      - yarn install
+      script:
+      - sudo node ./node_modules/mocha/bin/mocha ./dist/tests/procezz.test.js --grep process --timeout 20000 --exit
+    -
+      <<: *common
+      install:
+      - sudo apt-get install nginx
+      - yarn install
+      script:
+      - sudo node ./node_modules/mocha/bin/mocha ./dist/tests/procezz.test.js --grep foo --timeout 20000 --exit
+    # =======================
+    # E2E tests (end)
+    # =======================
