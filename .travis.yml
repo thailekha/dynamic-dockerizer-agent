@@ -16,6 +16,25 @@ dd_common: &common
 jobs:
   include:
     # =======================
+    # Code quality scans (start)
+    # =======================
+    -
+      if: type IN (push)
+      dist: trusty
+      language: bash
+      addons:
+        sonarcloud:
+          organization: "thailekha-github"
+          token:
+            secure: "pcoMbElGfLA7JQfMpLgZKYZS/l77ClMPHcA3+HDjKCgrBCECN3vGdxRG4MHjS24JyEO6DObCt88lVJkozUdFU9k7WZNl30BTX5Xus+1UNZ1C9igRjwVNjmAkG38wDHxqkeBfCbxBykmjnxwhS5Gk1w+e46ZWkH97aIidB8RxqQnTiolUlW3VGatGQdZ4zy8fYZNRsOFpiplO2PMxHoCe+oK0Ejok40Q4vUFQRSi/PTsrFx4lNCP44IuCwVOGJ5GoJOmW1BzMN6yqOUGVEp2PFFDS3lqfehXeqRKwF7qmDHXLlv4qnXIgB76U0OKxmrP/1I83k9Tutx249xiBG5I6njmn4Fy2l/YrrhN3IgShraJcCTdZbMHCAh6q8Qp10Jvk0ohZsclSI84W3zOsandq/lUSd7eEWgF60ieV2jWI+7VENw40S1ktrwAHiZQDQy07r5PMOwuT33hjUi3ZoUw8n29gZEQFJqfF+86YuFUTu5e9eWJSm0JrC08LCUF9MZ0aKruZYkLBiKUR6nb2mxQyO3mkGY5OWheOKejKCXmzxBntI3rry1xg58ldzJltQ1XI+hsTCLcupl2DQ4YjcEQEMvRYcVwl9S/PJ+e2uHGWMW/LOk+6NxFJ71HtPZQ2L29QYaRnNpznpz0ueyvuqhtmWL06pYRxtmB0cIB4vS7bRFo="
+          branches:
+          - master
+      script:
+      - sonar-scanner --debug
+    # =======================
+    # Code quality scans (end)
+    # =======================
+    # =======================
     # Unit tests (start)
     # =======================
     -
