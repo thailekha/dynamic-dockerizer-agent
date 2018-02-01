@@ -56,7 +56,7 @@ Vagrant.configure("2") do |config|
 
   install_common = ->(config) do
     config.vm.provision "shell", inline: <<-SHELL
-      apt-get -y install git dpkg-repack tree build-essential
+      apt-get -y install git dpkg-repack tree build-essential apt-rdepends
     SHELL
   end
 

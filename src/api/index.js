@@ -1,17 +1,12 @@
-import { version } from '../../package.json';
 import { Router } from 'express';
-import facets from './facets';
+import { procezzHandler } from './procezz';
 
-export default ({ config, db }) => {
-	let api = Router();
+export default function buildAPI(server) {
+  const IGNORED_PORTS = ['22','111', `${server.server.address().port}`];
+  const IGNORED_PROGRAMS = ['rpc.statd'];
 
-	// mount the facets resource
-	api.use('/facets', facets({ config, db }));
+  const router = Router({mergeParams:true});
+  procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS});
 
-	// perhaps expose some API metadata at the root
-	api.get('/', (req, res) => {
-		res.json({ version });
-	});
-
-	return api;
+  server.use('/process', router);
 }
