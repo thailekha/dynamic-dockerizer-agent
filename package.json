@@ -1,6 +1,6 @@
 {
   "name": "dynamic-dockerizer-agent",
-  "version": "0.0.2",
+  "version": "0.0.4",
   "description": "Agent component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
@@ -117,7 +117,8 @@
     "dockerode": "^2.5.3",
     "express": "^4.13.3",
     "morgan": "^1.8.0",
-    "shelljs": "^0.8.1"
+    "shelljs": "^0.8.1",
+    "swagger-jsdoc": "^1.9.7"
   },
   "devDependencies": {
     "babel-cli": "^6.9.0",
