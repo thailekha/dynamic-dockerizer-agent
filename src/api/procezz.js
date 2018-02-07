@@ -1,10 +1,26 @@
 import {parseNetstat, getProcessMetadata, convert, getOpennedFiles} from './procezz/index';
 
 export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}) {
+
+  /**
+    * @swagger
+    * /process/:
+    *   get:
+    *     tags:
+    *       - process
+    *     summary: 'Get all TCP processes'
+    *     description:
+    *     operationId: getProcesses
+    *     produces:
+    *       - application/json
+    *     responses:
+    *       '200': { description: 'Sucessfully get processes' }
+    *       '404': { description: 'Error netstat' }
+    */
   router.get('/', (req, res) => {
     parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, null, (err, processes) => {
       if (err) {
-        return res.status(404).json(err);
+        return res.status(500).json(err);
       }
       res.json(processes);
     });

@@ -9,6 +9,24 @@ import morgan from 'morgan';
 import bodyParser from 'body-parser';
 import config from './config.json';
 import buildAPI from './api/index';
+import swaggerJSDoc from 'swagger-jsdoc';
+import packagejson from '../package.json';
+import path from 'path';
+
+const swaggerDefinition = {
+  info: {
+    title: packagejson.name,
+    version: packagejson.version,
+    description: packagejson.description,
+  },
+  host: 'localhost:8080',
+  basePath: '/'
+};
+
+const swaggerSpec = swaggerJSDoc({
+  swaggerDefinition: swaggerDefinition,
+  apis: [path.join(__dirname, 'api/*.js')]
+});
 
 const app = express();
 app.server = http.createServer(app);
@@ -24,6 +42,12 @@ app.use(cors({
 app.use(bodyParser.json({
   limit : config.bodyLimit
 }));
+
+app.get('/swagger.json', (req,res) => {
+  res.json(swaggerSpec);
+});
+
+app.use('/docs', express.static(path.join(__dirname, '../assets/swagger')));
 
 app.server.listen(process.env.PORT || config.port, () => {
   buildAPI(app); //process endpoint need port number
