@@ -1,18 +1,23 @@
-dd_common: &common
+aws_common: &aws_common
+  env:
+  - secure: "Cqy2sl+6vKADMZdNxNZtTHsOCDJanUHQKSN+gamn3jdH7NKvCmtWRmQYNQQkJepeMld2N+o4XXjEjRuf2UYEx8NBQCBtMn64BY9gfYJ9gx5hSfeELsSomINsNLBmYJqQTGGFz7GwqznTSrDfPJxXG5uxZo+xnuotNLyfseEc48zAqlUOSBqv/jmGLy5R55oR/KVzCgPw6NWJJAnhjBKeUWjEmjs1fyZpn/Ol99ozQuOzetRETfcBKwfgJyWVvlHp6GWFS2Xbpt/P1uByv/wKrk+JZ0BZSRH8UqSJTkzCvQWi/9aJb0h1hc+TEVzKY2MQhk0yXaTvZ+q+1V0FOAYzZQcc1cfEw9cnQNubf/Rh5fewuLWDXrFdELQJGTR0qIG0Gb1QDf2fwah8n8NXVi51k86SbOTdQ7uFXlxw8EyY+spsBfX1/9mENf8AHHTOKV5Cr50mDGs5gnssjpE/v8XCXpsNY66FdD9H2Y4zmAAM3pN7xWw0oT+3UIq4SN4tcTVjcr2RnLXWpHc+5uZ8XOBPGnqPUYl06o0OkoujJbW9CKkZGesj5puVzKkMS4NKuu4v2KOGtYMjU3F/FJbE0yXdr5QUCq5C3wcB/yCQwmG74gAWSfb/CMjGP6kGaxv+PT/V6eilwHe8GSha73MXfyceFKt6jvs0Oq+cygEjDGTp3XY="
+  - secure: "dgrqPtcClimXVl3FXwkF/6nCT/N0vleal3elKZdZb6Ss4g0KDzpu6aXNuJ2aVS8v7Fw7B1khT4l1eiVnaAQM/YxXbdYjgwy1U+JWnBgIFRFGZzAUr+Rk2KJ/y9Obts8ZPLzWey4X9xuhVeTtuLB1kwfiBfJeo4zxD6LGY+baYGwgAKV5fBL8sZJFelWF/ddQ4OBIClJviVDR29ZmWDLHe7Gcjc26urXfg2St61XEVDHYkDO40sSwrQWrldlGhKtcIONKJcoCnjDlK9fVhgPJoleQB+46RKzU2lxS3q2X8PtOGgzCpgMRGzdD7oEYKoWyc8mS04T7Wz1Jm5/W51onyy6ZH2WCXQmMx+rYFq5UCb49jiCWuxcMCrwLcPdgDJO5QFwyicYmRylG/Fyai5rhHOwCCFrJn7uEiqtYhM52Hz7o6MyiGHamS6JufMXnO9rmc5aBWb/LyW0EWwxnyj9bfQym0/2OxSwy06+J6hzUEmDaDyNe5t1AUR5smWaqSKpOsNrx3uKQ3/Ym1ESp2/GSacP6G8eW3OK3/RwD2B9Ovz4mlz0c0CAfm0/tqmei5fR9kdGp8RILqeCWqp0I9S75KlBaN8QIGQGRqok3/XF4ZuslauhLCm0mnn9rviBOxyfz7fiVunOQLLYVicyzH0EuqCGVdtaD6u3WH80UzlB+ulc="
+  - AWS_DEFAULT_REGION=eu-west-1
+  - PATH=$HOME/.local/bin:$PATH
+  before_install:
+  - pip install --user awscli
+  - mkdir -p ~/$TRAVIS_BUILD_NUMBER
+  - aws s3 sync s3://dd-cicd/$TRAVIS_BUILD_NUMBER ~/$TRAVIS_BUILD_NUMBER
+dd_common: &dd_common
   if: type IN (push)
   sudo: required
   dist: trusty
   language: bash
-  cache:
-    directories:
-    - node_modules
-  before_install:
+  install:
   - sudo apt-get -y install git dpkg-repack tree build-essential apt-rdepends
   - curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
   - sudo apt-get install -y nodejs
-  - sudo npm install -g yarn
-  before_script:
-  - npm run build
+  - sudo npm install -g yarn istanbul-combine
 jobs:
   include:
     # =======================
@@ -36,9 +41,10 @@ jobs:
     # Unit tests (start)
     # =======================
     -
-      <<: *common
-      install:
+      <<: *dd_common
+      before_script:
       - yarn install
+      - npm run build
       script:
       - npm run test
     # =======================
@@ -48,19 +54,38 @@ jobs:
     # E2E tests (start)
     # =======================
     -
-      <<: *common
-      install:
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
       - sudo apt-get install nginx
       - yarn install
+      - npm run build
       script:
-      - sudo node ./node_modules/mocha/bin/mocha ./dist/tests/procezz.test.js --grep process --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep process --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/$TRAVIS_BUILD_NUMBER
     -
-      <<: *common
-      install:
-      - sudo apt-get install nginx
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
       - yarn install
+      - npm run build
       script:
-      - sudo node ./node_modules/mocha/bin/mocha ./dist/tests/procezz.test.js --grep foo --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep foo --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/$TRAVIS_BUILD_NUMBER
     # =======================
     # E2E tests (end)
+    # =======================
+    # =======================
+    # Code coverage (start)
+    # =======================
+    - stage: Aggregate coverage
+      <<: *aws_common
+      <<: *dd_common
+      script:
+      - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
+      - ls coverage
+    # =======================
+    # Code coverage (end)
     # =======================

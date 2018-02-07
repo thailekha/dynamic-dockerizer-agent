@@ -1,6 +1,6 @@
 {
   "name": "dynamic-dockerizer-agent",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Agent component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
@@ -126,9 +126,12 @@
     "babel-preset-es2015": "^6.9.0",
     "babel-preset-stage-0": "^6.5.0",
     "chai": "^4.1.2",
+    "codacy-coverage": "^2.0.3",
+    "codecov": "^3.0.0",
     "eslint": "^3.1.1",
     "mocha": "^5.0.0",
     "nodemon": "^1.9.2",
+    "nyc": "^11.4.1",
     "supertest": "^3.0.0"
   }
 }
