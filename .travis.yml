@@ -7,7 +7,7 @@ aws_common: &aws_common
   before_install:
   - pip install --user awscli
   - mkdir -p ~/$TRAVIS_BUILD_NUMBER
-  - aws s3 sync s3://dd-cicd/$TRAVIS_BUILD_NUMBER ~/$TRAVIS_BUILD_NUMBER
+  - aws s3 sync s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER ~/$TRAVIS_BUILD_NUMBER
 dd_common: &dd_common
   if: type IN (push)
   sudo: required
@@ -63,7 +63,7 @@ jobs:
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep process --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/$TRAVIS_BUILD_NUMBER
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
       <<: *dd_common
@@ -73,7 +73,7 @@ jobs:
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep foo --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/$TRAVIS_BUILD_NUMBER
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     # =======================
     # E2E tests (end)
     # =======================
@@ -89,6 +89,8 @@ jobs:
       - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
       - ls coverage
       - cp coverage/lcov.info coverage.lcov
+      - cp coverage/lcov.info ~/$TRAVIS_BUILD_NUMBER/coverage-all.lcov
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
       - ./node_modules/.bin/codecov
     # =======================
     # Code coverage (end)
