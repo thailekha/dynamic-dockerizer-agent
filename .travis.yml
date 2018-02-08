@@ -106,7 +106,7 @@ jobs:
       - git checkout $TRAVIS_BRANCH
       - git add coverage/lcov.info
       - git commit -m "[ci skip] code coverage"
-      - git push origin-ssh $TRAVIS_BRANCH
+      - git push origin-ssh $TRAVIS_BRANCH -f
       - codecov
     # =======================
     # Code coverage (end)
