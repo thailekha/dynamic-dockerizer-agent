@@ -81,8 +81,8 @@ jobs:
     # Code coverage (start)
     # =======================
     - stage: Aggregate coverage
+      if: NOT branch = master
       <<: *aws_common
-      <<: *dd_common
       sudo: false
       language: node_js
       node_js: "8"
