@@ -1,6 +1,6 @@
 {
   "name": "dynamic-dockerizer-master",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Master component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
@@ -8,7 +8,7 @@
     "build": "babel src -s -D -d dist --presets es2015,stage-0",
     "start": "node dist",
     "prestart": "npm run -s build",
-    "test": "eslint src",
+    "test": "eslint src --fix",
     "tfjson": "terraform fmt assets/clone.tf && cat assets/clone.tf | ./node_modules/hcl-to-json/bin/hcltojson.js > assets/clone.tf.json"
   },
   "eslintConfig": {
@@ -18,7 +18,8 @@
       "sourceType": "module"
     },
     "env": {
-      "node": true
+      "node": true,
+      "mocha": true
     },
     "rules": {
       "array-callback-return": "warn",
@@ -128,8 +129,12 @@
     "babel-core": "^6.9.0",
     "babel-preset-es2015": "^6.9.0",
     "babel-preset-stage-0": "^6.5.0",
+    "chai": "^4.1.2",
     "eslint": "^3.1.1",
     "hcl-to-json": "^0.1.1",
-    "nodemon": "^1.9.2"
+    "mocha": "^5.0.0",
+    "nodemon": "^1.9.2",
+    "nyc": "^11.4.1",
+    "supertest": "^3.0.0"
   }
 }

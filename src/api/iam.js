@@ -17,7 +17,7 @@ const router = Router({mergeParams:true});
   *     tags:
   *       - IAM
   *     summary: 'Verify an IAM credential'
-  *     description: 
+  *     description:
   *     operationId: verifyIam
   *     produces:
   *       - application/json

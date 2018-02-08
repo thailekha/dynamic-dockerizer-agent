@@ -240,10 +240,10 @@ export function plan(accessKeyId, cb) {
     }
     shell(`cd ${workspaceDir(accessKeyId)} &&
       terraform plan -var-file=sample.tfvars.json`, err => {
-        if (err) {
-          return cb(err);
-        }
-        cb(null);
-      });
+      if (err) {
+        return cb(err);
+      }
+      cb(null);
+    });
   });
 }
