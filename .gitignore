@@ -6,3 +6,4 @@
 /.vagrant
 yarn.lock
 snippets.js
+/secrets

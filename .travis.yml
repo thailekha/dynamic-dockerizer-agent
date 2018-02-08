@@ -14,16 +14,16 @@ dd_common: &dd_common
   dist: trusty
   language: bash
   install:
-  - sudo apt-get -y install git dpkg-repack tree build-essential apt-rdepends
+  - sudo apt-get -y install dpkg-repack tree build-essential apt-rdepends
   - curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
   - sudo apt-get install -y nodejs
-  - sudo npm install -g yarn istanbul-combine
+  - sudo npm install -g yarn
 jobs:
   include:
     # =======================
     # Code quality scans (start)
     # =======================
-    -
+    - stage: Code quality, unit tests, e2e tests
       if: type IN (push)
       dist: trusty
       language: bash
@@ -83,15 +83,31 @@ jobs:
     - stage: Aggregate coverage
       <<: *aws_common
       <<: *dd_common
-      before_script:
-      - yarn install
+      sudo: false
+      language: node_js
+      node_js: "8"
+      install:
+      - npm i -g codecov istanbul-combine
       script:
       - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
       - ls coverage
       - cp coverage/lcov.info coverage.lcov
-      - cp coverage/lcov.info ~/$TRAVIS_BUILD_NUMBER/coverage-all.lcov
+      - cp coverage/lcov.info ~/$TRAVIS_BUILD_NUMBER/lcov.info
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
-      - ./node_modules/.bin/codecov
+      - mkdir secrets
+      - openssl aes-256-cbc -K $encrypted_c2ed09502192_key -iv $encrypted_c2ed09502192_iv -in assets/id_rsa.enc -out secrets/id_rsa -d
+      - eval "$(ssh-agent -s)"
+      - chmod 600 secrets/id_rsa
+      - ssh-add secrets/id_rsa
+      - git config --global user.email "thailekha@yahoo.com"
+      - git config --global user.name "Travis"
+      - git remote add origin-ssh git@github.com:thailekha/dynamic-dockerizer-agent.git
+      - git fetch origin-ssh
+      - git checkout $TRAVIS_BRANCH
+      - git add coverage/lcov.info
+      - git commit -m "[ci skip] code coverage"
+      - git push origin-ssh $TRAVIS_BRANCH
+      - codecov
     # =======================
     # Code coverage (end)
     # =======================
