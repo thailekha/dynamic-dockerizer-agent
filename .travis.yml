@@ -83,9 +83,13 @@ jobs:
     - stage: Aggregate coverage
       <<: *aws_common
       <<: *dd_common
+      before_script:
+      - yarn install
       script:
       - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
       - ls coverage
+      - cp coverage/lcov.info coverage.lcov
+      - ./node_modules/.bin/codecov
     # =======================
     # Code coverage (end)
     # =======================

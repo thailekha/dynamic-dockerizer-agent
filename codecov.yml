@@ -1,0 +1,4 @@
+ignore:
+  - "assets"
+  - "Vagrantfile"
+  - "Dockerfile"
