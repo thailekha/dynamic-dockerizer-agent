@@ -115,7 +115,10 @@
     "dependency-graph": "^0.7.0",
     "dockerfile-generator": "^2.1.1",
     "dockerode": "^2.5.3",
+    "dotenv": "^5.0.0",
     "express": "^4.13.3",
+    "jsonwebtoken": "^8.1.1",
+    "lodash": "^4.17.5",
     "morgan": "^1.8.0",
     "shelljs": "^0.8.1",
     "swagger-jsdoc": "^1.9.7"

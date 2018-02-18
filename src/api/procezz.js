@@ -36,11 +36,11 @@ export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}) {
   });
 
   router.get('/:pid/convert', (req, res) => {
-    convert(IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, (err, dockerfile) => {
+    convert(IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, err => {
       if (err) {
         return res.status(404).json(err);
       }
-      res.json(dockerfile);
+      res.json({message: `Process ${req.params.pid} converted to Docker image`});
     });
   });
 
