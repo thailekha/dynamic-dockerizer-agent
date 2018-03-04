@@ -2,5 +2,8 @@
 	"port": 8081,
 	"bodyLimit": "100kb",
 	"corsHeaders": ["Link"],
-	"appSpace": "/tmp/dd-agent"
+	"appSpace": "/tmp/dd-agent",
+	"auth": {
+	   "secret": "secret"
+    }
 }

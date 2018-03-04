@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 // find daemons and zombies: ps axo pid,ppid,pgrp,tty,tpgid,sess,comm |awk '$2==1' |awk '$1==$3'
 // maybe put a & and parse everything upto exit_group, then kill after that :)
 // strace -fe open service mongod start
@@ -12,6 +14,10 @@ import buildAPI from './api/index';
 import swaggerJSDoc from 'swagger-jsdoc';
 import packagejson from '../package.json';
 import path from 'path';
+import jwtAuthenticate from './middleware/jwt-authenticate';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const swaggerDefinition = {
   info: {
@@ -42,6 +48,12 @@ app.use(cors({
 app.use(bodyParser.json({
   limit : config.bodyLimit
 }));
+
+if (process.env.DD_AGENT_SECRET) {
+  console.log('Using secret from dotenv');
+}
+
+app.use(jwtAuthenticate({ secret: process.env.DD_AGENT_SECRET || config.auth.secret }));
 
 app.get('/swagger.json', (req,res) => {
   res.json(swaggerSpec);

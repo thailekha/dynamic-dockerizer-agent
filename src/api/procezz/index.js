@@ -408,7 +408,6 @@ export function getProcessMetadata(pid, cb) {
 
 export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
   let port, program, metadata, buildPath, packagePath, workingDirectoryPath, debFiles, dockerfile;
-  var pushResponse = '';
 
   async.series([
     function(callback) {
@@ -551,7 +550,7 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
     },
     function(callback) {
       // issue: nginx: , causing docker tagging to fail
-      shell(`cd ${buildPath} && docker build -t thailekha/${program.replace(/\W/g, '')} .`, err => {
+      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')} .`, err => {
         if (err) {
           return callback(err);
         }
@@ -565,6 +564,6 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
       return cb(err);
     }
 
-    cb(null, {dockerfile, pushResponse});
+    cb(null);
   });
 }

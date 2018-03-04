@@ -7,3 +7,4 @@
 yarn.lock
 snippets.js
 /secrets
+.env
