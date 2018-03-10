@@ -4,7 +4,7 @@ import {DepGraph} from 'dependency-graph';
 import dockerfileGen from 'dockerfile-generator';
 import fs from 'fs';
 import { exec } from 'shelljs';
-import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir} from '../../lib/util';
+import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, setkeyv} from '../../lib/util';
 
 const APP_SPACE = config.appSpace;
 
@@ -373,7 +373,7 @@ export function getOpennedFiles(pid, cb) {
   });
 }
 
-export function getProcessMetadata(pid, cb) {
+export function getProcessMetadata(keyv, progressKey, pid, cb) {
   let metadata;
 
   async.series([
@@ -386,6 +386,9 @@ export function getProcessMetadata(pid, cb) {
         metadata = meta;
         callback(null);
       });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 30, callback);
     },
     function(callback) {
       getPackagesSequence(metadata.exe, (err, packagesSequence) => {
@@ -406,7 +409,7 @@ export function getProcessMetadata(pid, cb) {
   });
 }
 
-export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
+export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
   let port, program, metadata, buildPath, packagePath, workingDirectoryPath, debFiles, dockerfile;
 
   async.series([
@@ -429,7 +432,10 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
       });
     },
     function(callback) {
-      getProcessMetadata(pid, (err, meta) => {
+      setkeyv(keyv, progressKey, 10, callback);
+    },
+    function(callback) {
+      getProcessMetadata(null, null, pid, (err, meta) => {
         if (err) {
           return callback(err);
         }
@@ -437,6 +443,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
         metadata = meta;
         callback(null);
       });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 20, callback);
     },
     function(callback) {
       mkdir([buildPath, packagePath, workingDirectoryPath], err => {
@@ -448,6 +457,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
       });
     },
     function(callback) {
+      setkeyv(keyv, progressKey, 30, callback);
+    },
+    function(callback) {
       const runScriptContent = `#!/bin/bash\\n${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')} && while ps -C ${metadata.entrypointCmd}; do echo -n stopping process from going background ... && sleep 3; done`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, err => {
@@ -457,6 +469,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
 
         callback(null);
       });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 40, callback);
     },
     function(callback) {
       const repackers = metadata
@@ -480,6 +495,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
       });
     },
     function(callback) {
+      setkeyv(keyv, progressKey, 50, callback);
+    },
+    function(callback) {
       shell(`cd ${packagePath} && ls | grep .deb`, (err, stdout) => {
         if (err) {
           if (err.code && err.code === 1) {
@@ -491,6 +509,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
         debFiles = splitTrimFilter(stdout);
         callback(null);
       });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 60, callback);
     },
     function(callback) {
       const copyInstructions = [
@@ -540,6 +561,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
       });
     },
     function(callback) {
+      setkeyv(keyv, progressKey, 70, callback);
+    },
+    function(callback) {
       fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
         if (err) {
           return callback(err);
@@ -547,6 +571,9 @@ export function convert(IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
 
         callback(null);
       });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 80, callback);
     },
     function(callback) {
       // issue: nginx: , causing docker tagging to fail
