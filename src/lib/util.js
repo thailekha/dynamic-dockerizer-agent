@@ -114,3 +114,12 @@ export function mkdir(paths, cb) {
     cb(null);
   });
 }
+
+export function setkeyv(keyv, progressKey, value, cb) {
+  if (keyv && progressKey) {
+    return keyv
+      .set(progressKey, value)
+      .then(() => cb(null));
+  }
+  cb(null);
+}

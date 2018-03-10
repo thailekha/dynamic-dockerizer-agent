@@ -122,6 +122,7 @@ Vagrant.configure("2") do |config|
   config.vm.define "devbox" do |devbox|
     common_config[devbox]
     forward_port[8081]
+    forward_port[3001]
 
     fix_tty[devbox]
     install_docker[devbox]

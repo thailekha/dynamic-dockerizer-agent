@@ -1,6 +1,9 @@
 import {parseNetstat, getProcessMetadata, convert, getOpennedFiles} from './procezz/index';
+import progress from '../middleware/progress';
 
-export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}) {
+export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
+
+  router.use(progress(keyv));
 
   /**
     * @swagger
@@ -26,8 +29,9 @@ export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}) {
     });
   });
 
-  router.get('/:pid/metadata', (req, res) => {
-    getProcessMetadata(req.params.pid, (err, metadata) => {
+  router.get('/:pid', (req, res) => {
+    getProcessMetadata(keyv, req.headers['x-dd-progress'], req.params.pid, (err, metadata) => {
+      keyv.delete(req.headers['x-dd-progress']);
       if (err) {
         return res.status(404).json(err);
       }
@@ -36,7 +40,8 @@ export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}) {
   });
 
   router.get('/:pid/convert', (req, res) => {
-    convert(IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, err => {
+    convert(keyv, req.headers['x-dd-progress'], IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, err => {
+      keyv.delete(req.headers['x-dd-progress']);
       if (err) {
         return res.status(404).json(err);
       }
