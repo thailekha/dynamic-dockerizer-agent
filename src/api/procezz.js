@@ -1,8 +1,9 @@
 import {parseNetstat, getProcessMetadata, convert, getOpennedFiles} from './procezz/index';
 import progress from '../middleware/progress';
+import { Router } from 'express';
 
-export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
-
+export function procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
+  const router = Router({mergeParams:true});
   router.use(progress(keyv));
 
   /**
@@ -57,4 +58,6 @@ export function procezzHandler(router, {IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) 
       res.json(opennedfiles);
     });
   });
+
+  return router;
 }

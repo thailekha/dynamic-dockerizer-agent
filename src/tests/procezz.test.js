@@ -15,7 +15,13 @@ describe('process', function() {
   before(function(done) {
     shell(`service nginx start`, err => {
       expect(err).to.be.null;
-      done();
+
+      const intervalObject = setInterval(function() {
+        if (app.ddAgentReady) {
+          clearInterval(intervalObject);
+          done();
+        }
+      }, 1000);
     });
   });
 

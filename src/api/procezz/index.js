@@ -229,7 +229,7 @@ export function getPackagesSequence(exe, cb) {
       const onlyNotInstalledInBaseImage = dependencyGraph
         .overallOrder()
         .map(dep => function(asyncCallback) {
-          exec(`docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c "dpkg -L ${dep}"`, (code, stdout, stderr) => {
+          exec(`docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "dpkg -L ${dep}"`, (code, stdout, stderr) => {
             if (code === 1) {
               packagesSequence.push(dep);
               return asyncCallback(null);
@@ -237,7 +237,7 @@ export function getPackagesSequence(exe, cb) {
 
             if ( !(code === 0 || code === 1)) {
               return asyncCallback({
-                command: `docker run -i --rm --entrypoint /bin/bash ubuntu:14.04 -c "dpkg -L ${dep}"`,
+                command: `docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "dpkg -L ${dep}"`,
                 stderr: stderr
               });
             }
