@@ -81,13 +81,13 @@ export function splitTrimFilter(str) {
   return str.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 }
 
-export function shell(command, cb) {
+export function shell(command, checkStderrForError = true, cb) {
   exec(command, {silent:true}, (code, stdout, stderr) => {
     logger.info(command);
     logger.debug(`stdout: ${stdout}`);
     logger.debug(`stderr: ${stderr}`);
 
-    if (code !== 0) {
+    if (code !== 0 || (checkStderrForError && stderr)) {
       return cb({command, code, stderr});
     }
 
@@ -97,7 +97,7 @@ export function shell(command, cb) {
 
 export function mkdir(paths, cb) {
   const pathsBuilders = paths.map(path => function(asyncCallback) {
-    shell(`mkdir -p ${path}`, err => {
+    shell(`mkdir -p ${path}`, true, err => {
       if (err) {
         return asyncCallback(err);
       }

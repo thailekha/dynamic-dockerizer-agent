@@ -8,12 +8,12 @@ const router = Router({mergeParams:true});
 export default keyv => {
   router.use(jwtAuthenticate({ secret: config.auth.secret }));
 
-  router.get('/status/:progresskey', (req, res) => {
+  router.get('/status/:progresskey', (req, res, next) => {
     keyv
       .get(req.params.progresskey)
       .then(progress => {
         if (typeof progress === 'undefined') {
-          return res.status(500).json({'message': 'Cannot find progress key'});
+          return next({'message': 'Cannot find progress key'});
         }
         res.json({status: progress});
       });

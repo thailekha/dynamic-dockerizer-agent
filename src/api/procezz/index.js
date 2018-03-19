@@ -7,14 +7,14 @@ import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, setkeyv} from '../../lib/util';
 
 const APP_SPACE = config.appSpace;
+const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
 
 export function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
   exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', (code, stdout, stderr) => {
     // if terraform command time out, no response is returned by express, why?
-    if (code !== 0) {
+    if (code !== 0 || stderr) {
       return cb({
-        command: 'netstat',
-        stderr: stderr
+        message: 'Failed to gather processes listening on network'
       });
     }
 
@@ -50,9 +50,11 @@ export function parseProcfs(pid, cb) {
 
   async.series([
     function(callback) {
-      shell(`cat /proc/${pid}/cmdline`, (err, stdout) => {
+      shell(`cat /proc/${pid}/cmdline`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to find the cmd'
+          });
         }
 
         cmdline = stdout;
@@ -60,9 +62,11 @@ export function parseProcfs(pid, cb) {
       });
     },
     function(callback) {
-      shell(`readlink -f /proc/${pid}/exe`, (err, stdout) => {
+      shell(`readlink -f /proc/${pid}/exe`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to find the executable file'
+          });
         }
 
         exe = stdout;
@@ -71,8 +75,8 @@ export function parseProcfs(pid, cb) {
       });
     },
     function(callback) {
-      exec(`which ${bin}`, code => {
-        if (code !== 0) {
+      exec(`which ${bin}`, (code, _, stderr) => {
+        if (code !== 0 || stderr) {
           entrypointCmd = head(exe,'\n');
         } else {
           entrypointCmd = bin;
@@ -83,9 +87,11 @@ export function parseProcfs(pid, cb) {
       });
     },
     function(callback) {
-      shell(`readlink -f /proc/${pid}/cwd`, (err, stdout) => {
+      shell(`readlink -f /proc/${pid}/cwd`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to find the current working directory'
+          });
         }
 
         cwd = head(stdout, '\n');
@@ -128,9 +134,11 @@ export function getPackagesSequence(exe, cb) {
 
   async.series([
     function(callback) {
-      shell(`dpkg -S ${exe}`, (err, stdout) => {
+      shell(`dpkg -S ${exe}`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to search for packages from the executable file'
+          });
         }
 
         corePackages = Array.from(
@@ -148,7 +156,7 @@ export function getPackagesSequence(exe, cb) {
     },
     function(callback) {
       const buildDepsBuilders = corePackages.map(corePackage => function(asyncCallback) {
-        shell(`apt-rdepends ${corePackage} --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+        shell(`apt-rdepends ${corePackage} --state-follow=Installed --state-show=Installed -d`, !CHECK_STDERR_FOR_ERROR, (err, stdout) => {
           if (err) {
             return asyncCallback(err);
           }
@@ -160,14 +168,16 @@ export function getPackagesSequence(exe, cb) {
 
       async.series(buildDepsBuilders, function(err) {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to get dependencies of core packages'
+          });
         }
         callback(null);
       });
     },
     function(callback) {
       const reverseDepsBuilders = corePackages.map(corePackage => function(asyncCallback) {
-        shell(`apt-rdepends ${corePackage} -r --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+        shell(`apt-rdepends ${corePackage} -r --state-follow=Installed --state-show=Installed -d`, !CHECK_STDERR_FOR_ERROR, (err, stdout) => {
           if (err) {
             return asyncCallback(err);
           }
@@ -179,7 +189,9 @@ export function getPackagesSequence(exe, cb) {
 
       async.series(reverseDepsBuilders, function(err) {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to get reverse dependencies of core packages'
+          });
         }
         callback(null);
       });
@@ -187,7 +199,7 @@ export function getPackagesSequence(exe, cb) {
     function(callback) {
       const reverseBuildDepsBuilders = reverseDeps.
         map(pair => function(asyncCallback) {
-          shell(`apt-rdepends ${pair.pkg} --build-depends --state-follow=Installed --state-show=Installed -d`, (err, stdout) => {
+          shell(`apt-rdepends ${pair.pkg} --build-depends --state-follow=Installed --state-show=Installed -d`, !CHECK_STDERR_FOR_ERROR, (err, stdout) => {
             if (err) {
               return asyncCallback(err);
             }
@@ -198,30 +210,39 @@ export function getPackagesSequence(exe, cb) {
 
       async.series(reverseBuildDepsBuilders, function(err) {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to get build dependencies of the reverse dependencies of core packages'
+          });
         }
 
         callback(null);
       });
     },
     function(callback) {
-      buildDeps
-        .concat(reverseBuildDeps)
-        .forEach(({pkg, dep}) => {
-          dependencyGraph.addNode(pkg);
-          dependencyGraph.addNode(dep);
-          dependencyGraph.addDependency(pkg,dep);
+      try {
+        buildDeps
+          .concat(reverseBuildDeps)
+          .forEach(({pkg, dep}) => {
+            dependencyGraph.addNode(pkg);
+            dependencyGraph.addNode(dep);
+            dependencyGraph.addDependency(pkg,dep);
 
-          try {
-            dependencyGraph.overallOrder();
-          } catch (err) {
-            if (err.toString().indexOf('Dependency Cycle Found') > -1) {
-              dependencyGraph.removeDependency(pkg,dep);
-            } else {
-              throw (err);
+            try {
+              dependencyGraph.overallOrder();
+            } catch (err) {
+              if (err.toString().indexOf('Dependency Cycle Found') > -1) {
+                dependencyGraph.removeDependency(pkg,dep);
+              } else {
+                throw (err);
+              }
             }
-          }
-        });
+          });
+      } catch (err) {
+        //cannot break the loop in foreach so catch the err here
+        const errMsg = 'Failed to build package dependency graph';
+        err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
+        return callback(err);
+      }
 
       callback(null);
     },
@@ -235,7 +256,7 @@ export function getPackagesSequence(exe, cb) {
               return asyncCallback(null);
             }
 
-            if ( !(code === 0 || code === 1)) {
+            if ( !(code === 0 || code === 1) || stderr ) {
               return asyncCallback({
                 command: `docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "dpkg -L ${dep}"`,
                 stderr: stderr
@@ -248,7 +269,9 @@ export function getPackagesSequence(exe, cb) {
 
       async.series(onlyNotInstalledInBaseImage, function(err) {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to filter the package dependency graph'
+          });
         }
 
         callback(null);
@@ -271,7 +294,6 @@ export function getOpennedFiles(pid, cb) {
   async.series([
     function(callback) {
       parseProcfs(pid, (err, proc) => {
-        logger.info('getOpennedFiles: parseProcfs');
         if (err) {
           return callback(err);
         }
@@ -282,9 +304,10 @@ export function getOpennedFiles(pid, cb) {
     },
     function(callback) {
       mkdir([stracePath], err => {
-        logger.info('getOpennedFiles: mkdir');
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to create folder for building Docker image for the process'
+          });
         }
 
         callback(null);
@@ -293,7 +316,7 @@ export function getOpennedFiles(pid, cb) {
     function(callback) {
       // kill process
       async.someSeries([`service ${procfs.bin} stop`,`kill ${pid}`,`kill -9 ${pid}`], function(cmd, asyncCallback) {
-        shell(cmd, err => {
+        shell(cmd, CHECK_STDERR_FOR_ERROR, err => {
           if (err) {
             if (err.code === 1) {
               return asyncCallback(null, false);
@@ -305,9 +328,10 @@ export function getOpennedFiles(pid, cb) {
           asyncCallback(null, true);
         });
       }, function(err, processStopped) {
-        logger.info('getOpennedFiles: kill process');
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to kill the process'
+          });
         }
 
         callback(processStopped ? null : 'Cannot stop process');
@@ -322,9 +346,10 @@ export function getOpennedFiles(pid, cb) {
       ].join(' ');
       exec(command,
         (code, stdout, stderr) => {
-          logger.info('getOpennedFiles: start strace');
-          if (code !== 0) {
-            return callback({command, code, stderr});
+          if (code !== 0 || stderr) {
+            return callback({
+              message: 'Failed to trace openned files'
+            });
           }
 
           opennedFiles = stderr
@@ -336,36 +361,42 @@ export function getOpennedFiles(pid, cb) {
         });
     },
     function(callback) {
-      shell(`ps -C strace`, err => {
-        logger.info('getOpennedFiles: check strace');
+      shell(`ps -C strace`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           if (err.code === 1) {
             return callback(null);
           } else {
-            return callback(err);
+            return callback({
+              message: 'Failed to trace openned files'
+            });
           }
         }
 
         // start strace killer
         const straceKiller = setInterval(() => {
           //kill if see any strace process in sleep state
-          shell(`ps -C strace -o state= | grep S`, err => {
+          shell(`ps -C strace -o state= | grep S`, CHECK_STDERR_FOR_ERROR, err => {
             logger.info('getOpennedFiles: check and kill strace');
             if (err && err.code === 1) {
               logger.debug('interval');
               return;
             }
 
-            logger.debug('Killing strace');
+            if (err) {
+              clearInterval(straceKiller);
+              return callback({
+                message: 'Failed to trace openned files'
+              });
+            }
+
             clearInterval(straceKiller);
-            callback(err ? err : null);
+            callback(null);
           });
         }, 2000);
       });
     }
   ],
   function(err) {
-    logger.info('getOpennedFiles: done');
     if (err) {
       return cb(err);
     }
@@ -420,7 +451,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         }
 
         if (processes.length !== 1) {
-          return callback(`Error finding process with pid ${pid}`);
+          return callback({
+            message: `Failed to find process with pid ${pid}`
+          });
         }
 
         port = processes[0].port;
@@ -450,7 +483,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     function(callback) {
       mkdir([buildPath, packagePath, workingDirectoryPath], err => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to update folder for building Docker image for the process'
+          });
         }
 
         callback(null);
@@ -462,9 +497,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     function(callback) {
       const runScriptContent = `#!/bin/bash\\n${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')} && while ps -C ${metadata.entrypointCmd}; do echo -n stopping process from going background ... && sleep 3; done`;
 
-      shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, err => {
+      shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to generate run script'
+          });
         }
 
         callback(null);
@@ -477,7 +514,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       const repackers = metadata
         .packagesSequence
         .map(p => function(asyncCallback) {
-          shell(`cd ${packagePath} && dpkg-repack ${p}`, err => {
+          shell(`cd ${packagePath} && dpkg-repack ${p}`, !CHECK_STDERR_FOR_ERROR, err => {
             if (err) {
               return asyncCallback(err);
             }
@@ -488,7 +525,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
       async.series(repackers, err => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to repack dependencies'
+          });
         }
 
         callback(null);
@@ -498,12 +537,14 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       setkeyv(keyv, progressKey, 50, callback);
     },
     function(callback) {
-      shell(`cd ${packagePath} && ls | grep .deb`, (err, stdout) => {
+      shell(`cd ${packagePath} && ls | grep .deb`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
           if (err.code && err.code === 1) {
             return callback(null);
           }
-          return callback(err);
+          return callback({
+            message: 'Failed to gather repacked dependencies .deb files'
+          });
         }
 
         debFiles = splitTrimFilter(stdout);
@@ -553,7 +594,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
       dockerfileGen.generate(JSON.stringify(dockerfileContent), (err,result) => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to generate Dockerfile'
+          });
         }
 
         dockerfile = result;
@@ -566,7 +609,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     function(callback) {
       fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to serialize Dockerfile'
+          });
         }
 
         callback(null);
@@ -577,9 +622,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       // issue: nginx: , causing docker tagging to fail
-      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')} .`, err => {
+      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')} .`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
-          return callback(err);
+          return callback({
+            message: 'Failed to build Docker image'
+          });
         }
 
         callback(null);
