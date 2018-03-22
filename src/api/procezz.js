@@ -41,6 +41,8 @@ export function procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
   });
 
   router.get('/:pid/convert', (req, res, next) => {
+    req.connection.setTimeout( 1000 * 60 * 10 );
+
     convert(keyv, req.headers['x-dd-progress'], IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, err => {
       keyv.delete(req.headers['x-dd-progress']);
       if (err) {
