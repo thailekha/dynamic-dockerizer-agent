@@ -2,6 +2,7 @@ import { procezzHandler } from './procezz';
 import { checkhostHandler } from './checkhost';
 import progress from './progress';
 import Keyv from 'keyv';
+import errorHandler from './error';
 
 const keyv = new Keyv();
 
@@ -12,4 +13,5 @@ export default function buildAPI(server) {
   server.use('/checkhost', checkhostHandler());
   server.use('/process', procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv));
   server.use('/progress', progress(keyv));
+  server.use(errorHandler);
 }

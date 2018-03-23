@@ -6,13 +6,15 @@ import { exec } from 'shelljs';
 export function checkhostHandler() {
   const router = Router({mergeParams:true});
 
-  router.get('/', (req, res) => {
+  router.get('/', (req, res, next) => {
     let osMsg, packageMsg;
 
     async.series([
       function(callback) {
         getos((err,os) => {
           if (err) {
+            const errMsg = 'Failed to get OS';
+            err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
             return callback(err);
           }
 
@@ -26,13 +28,18 @@ export function checkhostHandler() {
         });
       },
       function(callback) {
-        exec(`dpkg-query -W dpkg-repack build-essential apt-rdepends docker`, code => {
+        exec(`dpkg-query -W dpkg-repack build-essential apt-rdepends docker`, (code, _, stderr) => {
+          if ( !(code === 0 || code === 1) || stderr ) {
+            return callback({
+              message: 'Failed to validate required packages'
+            });
+          }
+
           if (code === 0) {
             packageMsg = 'All required packages installed';
-          } else if  (code === 1) {
-            packageMsg = `Not all required packages installed, please reprovision or manually make sure the following packages are installed: dpkg-repack build-essential apt-rdepends`;
           } else {
-            return callback('Error validating packages');
+            //code === 1
+            packageMsg = `Not all required packages installed, please reprovision or manually make sure the following packages are installed: dpkg-repack build-essential apt-rdepends`;
           }
 
           callback(null);
@@ -41,7 +48,7 @@ export function checkhostHandler() {
     ],
     function(err) {
       if (err) {
-        return res.status(500).json(err);
+        return next(err);
       }
       const message = `${osMsg}, ${packageMsg}`;
       res.json({message});

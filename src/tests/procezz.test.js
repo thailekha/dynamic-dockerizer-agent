@@ -13,7 +13,7 @@ const payload = {};
 describe('process', function() {
 
   before(function(done) {
-    shell(`service nginx start`, err => {
+    shell(`service nginx start`, true, err => {
       expect(err).to.be.null;
 
       const intervalObject = setInterval(function() {

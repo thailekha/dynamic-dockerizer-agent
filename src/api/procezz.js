@@ -21,39 +21,41 @@ export function procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
     *       '200': { description: 'Sucessfully get processes' }
     *       '404': { description: 'Error netstat' }
     */
-  router.get('/', (req, res) => {
+  router.get('/', (req, res, next) => {
     parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, null, (err, processes) => {
       if (err) {
-        return res.status(500).json(err);
+        return next(err);
       }
       res.json(processes);
     });
   });
 
-  router.get('/:pid', (req, res) => {
+  router.get('/:pid', (req, res, next) => {
     getProcessMetadata(keyv, req.headers['x-dd-progress'], req.params.pid, (err, metadata) => {
       keyv.delete(req.headers['x-dd-progress']);
       if (err) {
-        return res.status(404).json(err);
+        return next(err);
       }
       res.json(metadata);
     });
   });
 
-  router.get('/:pid/convert', (req, res) => {
+  router.get('/:pid/convert', (req, res, next) => {
+    req.connection.setTimeout( 1000 * 60 * 10 );
+
     convert(keyv, req.headers['x-dd-progress'], IGNORED_PORTS, IGNORED_PROGRAMS, req.params.pid, err => {
       keyv.delete(req.headers['x-dd-progress']);
       if (err) {
-        return res.status(404).json(err);
+        return next(err);
       }
       res.json({message: `Process ${req.params.pid} converted to Docker image`});
     });
   });
 
-  router.get('/:pid/opennedfiles', (req, res) => {
+  router.get('/:pid/opennedfiles', (req, res, next) => {
     getOpennedFiles(req.params.pid, (err, opennedfiles) => {
       if (err) {
-        return res.status(404).json(err);
+        return next(err);
       }
       res.json(opennedfiles);
     });

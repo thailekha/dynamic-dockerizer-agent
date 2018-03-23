@@ -6,5 +6,6 @@
 	"auth": {
 	   "secret": "secret"
     },
-    "baseimage": "baseimage"
+    "baseimage": "baseimage",
+    "vmimage": "vmimage"
 }
