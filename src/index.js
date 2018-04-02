@@ -56,11 +56,14 @@ prepareBaseImage(err => {
     limit : config.bodyLimit
   }));
 
-  if (process.env.DD_AGENT_SECRET) {
-    console.log('Using secret from dotenv');
+  if (process.env.IGNORE_AUTH === 'TRUE') {
+    console.log('Dev mode, not using JWT middleware');
+  } else {
+    if (process.env.DD_AGENT_SECRET) {
+      console.log('Using secret from dotenv');
+    }
+    app.use(jwtAuthenticate({ secret: process.env.DD_AGENT_SECRET || config.auth.secret }));
   }
-
-  app.use(jwtAuthenticate({ secret: process.env.DD_AGENT_SECRET || config.auth.secret }));
 
   app.get('/swagger.json', (req,res) => {
     res.json(swaggerSpec);

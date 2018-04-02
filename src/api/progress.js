@@ -1,13 +1,9 @@
 import { Router } from 'express';
-import config from '../config.json';
-import jwtAuthenticate from '../middleware/jwt-authenticate';
 import shortid from 'shortid';
 
 const router = Router({mergeParams:true});
 
 export default keyv => {
-  router.use(jwtAuthenticate({ secret: config.auth.secret }));
-
   router.get('/status/:progresskey', (req, res, next) => {
     keyv
       .get(req.params.progresskey)

@@ -4,7 +4,7 @@
   "description": "Agent component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
-    "dev": "nodemon -L -w src --exec \"babel-node src --presets es2015,stage-0\"",
+    "dev": "IGNORE_AUTH=TRUE nodemon -L -w src --exec \"babel-node src --presets es2015,stage-0\"",
     "build": "babel src -s -D -d dist --presets es2015,stage-0",
     "start": "node dist",
     "prestart": "npm run -s build",

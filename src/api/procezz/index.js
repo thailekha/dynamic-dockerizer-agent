@@ -7,6 +7,7 @@ import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, setkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import Docker from 'dockerode';
+import _ from 'lodash';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
@@ -282,6 +283,10 @@ export function getPackagesSequence(exe, cb) {
 
         callback(null);
       });
+    },
+    function(callback) {
+      packagesSequence.push('strace');
+      callback(null);
     }
   ],
   function(err) {
@@ -329,11 +334,53 @@ function prepareWholeVMContainer(cb) {
   });
 }
 
-export function getOpennedFiles(pid, cb) {
-  let procfs;
+function shortenPaths(paths) {
+  var shortenedPaths = [];
+
+  paths.forEach((thisPath, _, array) => {
+    const thisPathParts = tail(thisPath, '/'); //first is '' so skip it
+
+    if (['root', 'home', 'opt'].indexOf(thisPathParts[0]) < 0) {
+      return shortenedPaths.push(thisPath);
+    }
+
+    var diffIndex = null;
+
+    array.forEach(thatPath => {
+      if (thatPath === thisPath) {
+        return;
+      }
+
+      const thatPathParts = tail(thatPath,'/');
+      thisPathParts.forEach((part, index) => {
+        if (thatPathParts.length <= index) {
+          return;
+        }
+
+        if (part === thatPathParts[index] && (diffIndex === null || index > diffIndex)) {
+          diffIndex = index;
+        }
+      });
+    });
+
+    diffIndex += 1;
+
+    if (diffIndex > 2) {
+      shortenedPaths.push(thisPath.split('/').slice(0,diffIndex).join('/'));
+    } else {
+      shortenedPaths.push(thisPath);
+    }
+  });
+
+  return _.uniq(shortenedPaths);
+}
+
+function getOpennedFiles(pid, cb) {
+  let procfs, opennedFiles;
   // const stracePath = `${APP_SPACE}/strace`;
-  var opennedFiles = [];
+  var opennedFilesChunks = [];
   var resolvedOpennedFiles = []; //cater for symlinks
+  var shortenedOpennedFiles = [];
 
   async.series([
     function(callback) {
@@ -358,8 +405,7 @@ export function getOpennedFiles(pid, cb) {
     function(callback) {
       const command = [
         `cd ${procfs.cwd} &&`,
-        `strace -fe open ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')}`,
-        // `&> ${stracePath}/${procfs.bin}.log`].join(' '),
+        `strace -fe open,openat ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')}`,
       ].join(' ');
 
       const STRACE_CONTAINER = {
@@ -399,58 +445,58 @@ export function getOpennedFiles(pid, cb) {
               return callback(err);
             }
 
-            stream.on('data', chunk => {
-              opennedFiles = opennedFiles.concat(
-                chunk
-                  .toString()
-                  .split(`\n`)
-                  .map(line => line.split(`"`))
-                  //open_at as well
-                  .filter(lineParts => lineParts.length > 0
-                    && lineParts[0] === 'open('
-                    && lineParts
-                      .filter(p => p.indexOf('= -1') > -1).length === 0)
-                  .map(line => line[1])
-              );
-            });
+            stream.on('data', chunk => opennedFilesChunks.push(chunk));
 
-            const straceKiller = setInterval(() => {
-              //remove strace container if the strace process in it enters the sleep state
-              shell(`docker exec ${container.id} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
-                if (err && err.code === 1) {
-                  logger.debug('strace interval');
-                  return;
-                }
+            setTimeout(() => {
+              const straceKiller = setInterval(() => {
+                //remove strace container if the strace process in it enters the sleep state
+                shell(`docker exec ${container.id} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
+                  if (err && err.code === 1) {
+                    logger.debug('strace interval');
+                    return;
+                  }
 
-                clearInterval(straceKiller);
+                  clearInterval(straceKiller);
 
-                if (err) {
-                  return callback({
-                    message: 'Failed to stop tracing for openned files'
-                  });
-                }
-
-                shell(`docker rm -f ${container.id}`, CHECK_STDERR_FOR_ERROR, err => {
                   if (err) {
                     return callback({
                       message: 'Failed to stop tracing for openned files'
                     });
                   }
 
-                  callback(null);
-                });
-              });
-            }, 5000);
+                  shell(`docker rm -f ${container.id}`, CHECK_STDERR_FOR_ERROR, err => {
+                    if (err) {
+                      return callback({
+                        message: 'Failed to stop tracing for openned files'
+                      });
+                    }
 
+                    callback(null);
+                  });
+                });
+              }, 3000);
+            }, 5000);
           });
         });
       });
     },
     function(callback) {
-      //resolve to directory if not ~ or /
+      opennedFiles = Buffer
+        .concat(opennedFilesChunks)
+        .toString()
+        .split(`\n`)
+        .filter(line => line.indexOf('= -1') < 0)
+        .map(line => line.split(`"`))
+        .filter(lineParts => lineParts.length > 1 && (lineParts[0].indexOf('open(') > -1 || lineParts[0].indexOf('openat(') > -1))
+        .map(line => line[1])
+        .filter(path => ['/mnt','/sys','/proc','/dev','/run'].filter(ignored => path.indexOf(ignored) === 0).length === 0);
+
       const opennedFilesResolver = opennedFiles.map(f => function(asyncCallback) {
         fs.realpath(f, (err, resolvedFile) => {
           if (err) {
+            if (err.code === 'ENOENT') {
+              return asyncCallback(null); //sometimes a process create then delete a temporary file
+            }
             return asyncCallback(err);
           }
 
@@ -468,17 +514,73 @@ export function getOpennedFiles(pid, cb) {
 
         callback(null);
       });
+    },
+    function(callback) {
+      var shortenedPaths = shortenPaths(resolvedOpennedFiles);
+      var tempShortenedPaths = shortenPaths(shortenedPaths);
+
+      while (tempShortenedPaths.length < shortenedPaths.length) {
+        shortenedPaths = tempShortenedPaths;
+        tempShortenedPaths = shortenPaths(tempShortenedPaths);
+      }
+
+      shortenedOpennedFiles = shortenedPaths;
+      callback(null);
     }
   ],
   function(err) {
     if (err) {
       return cb(err);
     }
-    cb(null, {opennedFiles: resolvedOpennedFiles});
+    cb(null, {opennedFiles: shortenedOpennedFiles});
   });
 }
 
-export function getProcessMetadata(keyv, progressKey, pid, cb) {
+export function inspectProcess(keyv, progressKey, pid, cb) {
+  let metadata;
+
+  async.series([
+    function(callback) {
+      getProcessMetadata(pid, (err, meta) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata = meta;
+        callback(null);
+      });
+    },
+    function(callback) {
+      setkeyv(keyv, progressKey, 40, callback);
+    },
+    function(callback) {
+      getOpennedFiles(pid, (err, opennedFiles) => {
+        if (err || !opennedFiles || !opennedFiles.opennedFiles) {
+          const errMsg = 'Failed to collect files that process openned';
+          if (err) {
+            err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
+            return callback(err);
+          }
+          return callback({
+            message: errMsg
+          });
+        }
+
+        metadata.opennedFiles = opennedFiles.opennedFiles;
+        callback(null);
+      });
+    }
+  ],
+  function(err) {
+    if (err) {
+      return cb(err);
+    }
+
+    cb(null, metadata);
+  });
+}
+
+function getProcessMetadata(pid, cb) {
   let metadata;
 
   async.series([
@@ -491,9 +593,6 @@ export function getProcessMetadata(keyv, progressKey, pid, cb) {
         metadata = meta;
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 30, callback);
     },
     function(callback) {
       getPackagesSequence(metadata.exe, (err, packagesSequence) => {
@@ -543,7 +642,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       setkeyv(keyv, progressKey, 10, callback);
     },
     function(callback) {
-      getProcessMetadata(null, null, pid, (err, meta) => {
+      getProcessMetadata(pid, (err, meta) => {
         if (err) {
           return callback(err);
         }
@@ -570,7 +669,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       setkeyv(keyv, progressKey, 30, callback);
     },
     function(callback) {
-      const runScriptContent = `#!/bin/bash\\n${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')} && while ps -C ${metadata.entrypointCmd}; do echo -n stopping process from going background ... && sleep 3; done`;
+      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
@@ -699,6 +798,10 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
             'args': ['-i','--force-depends',`/packages/${p}`,] //dependency graph took care of dependencies, so can force here
           })));
 
+      // const installStrace = [{
+      //   'command': 'apt-get update && apt-get install -y strace'
+      // }];
+
       const dockerfileContent = {
         'imagename': 'ubuntu',
         'imageversion': '14.04',
@@ -718,6 +821,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           });
         }
 
+        //dockerfile = result.replace(`RUN ["apt-get update && apt-get install -y strace"]`,"RUN apt-get update && apt-get install -y strace");
         dockerfile = result;
         callback(null);
       });

@@ -1,4 +1,4 @@
-import {parseNetstat, getProcessMetadata, convert, getOpennedFiles} from './procezz/index';
+import {parseNetstat, inspectProcess, convert} from './procezz/index';
 import progress from '../middleware/progress';
 import { Router } from 'express';
 
@@ -31,7 +31,7 @@ export function procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
   });
 
   router.get('/:pid', (req, res, next) => {
-    getProcessMetadata(keyv, req.headers['x-dd-progress'], req.params.pid, (err, metadata) => {
+    inspectProcess(keyv, req.headers['x-dd-progress'], req.params.pid, (err, metadata) => {
       keyv.delete(req.headers['x-dd-progress']);
       if (err) {
         return next(err);
@@ -49,15 +49,6 @@ export function procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv) {
         return next(err);
       }
       res.json({message: `Process ${req.params.pid} converted to Docker image`});
-    });
-  });
-
-  router.get('/:pid/opennedfiles', (req, res, next) => {
-    getOpennedFiles(req.params.pid, (err, opennedfiles) => {
-      if (err) {
-        return next(err);
-      }
-      res.json(opennedfiles);
     });
   });
 
