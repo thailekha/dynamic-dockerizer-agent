@@ -60,8 +60,8 @@ export function splitTrimFilter(str) {
 }
 
 export function shell(command, checkStderrForError = true, cb) {
+  logger.info(command);
   exec(command, {silent:true}, (code, stdout, stderr) => {
-    logger.info(command);
     logger.debug(`stdout: ${stdout}`);
     logger.debug(`stderr: ${stderr}`);
 
