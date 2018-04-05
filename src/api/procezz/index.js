@@ -143,9 +143,9 @@ export function getPackagesSequence(exe, cb) {
     function(callback) {
       shell(`dpkg -S ${exe}`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback({
-            message: 'Failed to search for packages from the executable file'
-          });
+          logger.debug('Failed to search for packages from the executable file, so will only copy the executable file instead');
+          corePackages = [];
+          return callback(null);
         }
 
         corePackages = Array.from(
@@ -772,6 +772,13 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           'src': `extraFiles/${last(f, '/')}`,
           'dst': f
         }));
+
+      if (metadata.packagesSequence.length === 0) {
+        extraCopyInstructions.push({
+          'src': `extraFiles/${last(metadata.exe, '/')}`,
+          'dst': metadata.exe
+        });
+      }
 
       const copyInstructions = [
         {
