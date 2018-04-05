@@ -4,7 +4,7 @@ import {DepGraph} from 'dependency-graph';
 import dockerfileGen from 'dockerfile-generator';
 import fs from 'fs';
 import { exec } from 'shelljs';
-import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, setkeyv} from '../../lib/util';
+import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import Docker from 'dockerode';
 import _ from 'lodash';
@@ -539,7 +539,7 @@ function getOpennedFiles(pid, cb) {
 export function inspectProcess(keyv, progressKey, pid, cb) {
   let metadata;
 
-  async.series([
+  async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
       getProcessMetadata(pid, (err, meta) => {
         if (err) {
@@ -549,9 +549,6 @@ export function inspectProcess(keyv, progressKey, pid, cb) {
         metadata = meta;
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 40, callback);
     },
     function(callback) {
       getOpennedFiles(pid, (err, opennedFiles) => {
@@ -570,7 +567,7 @@ export function inspectProcess(keyv, progressKey, pid, cb) {
         callback(null);
       });
     }
-  ],
+  ]),
   function(err) {
     if (err) {
       return cb(err);
@@ -616,7 +613,7 @@ function getProcessMetadata(pid, cb) {
 export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
   let port, program, metadata, buildPath, packagePath, workingDirectoryPath, extraFilesPath, extraFiles, debFiles, dockerfile;
 
-  async.series([
+  async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
       parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, pid, (err, {processes}) => {
         if (err) {
@@ -639,9 +636,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 10, callback);
-    },
-    function(callback) {
       getProcessMetadata(pid, (err, meta) => {
         if (err) {
           return callback(err);
@@ -650,9 +644,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         metadata = meta;
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 20, callback);
     },
     function(callback) {
       mkdir([buildPath, packagePath, workingDirectoryPath, extraFilesPath], err => {
@@ -666,9 +657,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 30, callback);
-    },
-    function(callback) {
       const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
@@ -680,9 +668,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 40, callback);
     },
     function(callback) {
       const repackers = metadata
@@ -706,9 +691,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 50, callback);
     },
     function(callback) {
       getOpennedFiles(pid, (err, opennedFiles) => {
@@ -762,9 +744,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         debFiles = splitTrimFilter(stdout);
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 60, callback);
     },
     function(callback) {
       const extraCopyInstructions = extraFiles
@@ -834,9 +813,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 70, callback);
-    },
-    function(callback) {
       fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
         if (err) {
           return callback({
@@ -846,9 +822,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 80, callback);
     },
     function(callback) {
       // issue: nginx: , causing docker tagging to fail
@@ -862,7 +835,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         callback(null);
       });
     }
-  ],
+  ]),
   function(err) {
     if (err) {
       return cb(err);

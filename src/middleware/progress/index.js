@@ -6,7 +6,6 @@ export default keyv => {
 
   function middleware(req, _, next) {
     if (req.headers['x-dd-progress']) {
-      console.log(`@\n@\n@\nMiddleware setting progress key from header`);
       return keyv
         .set(req.headers['x-dd-progress'], 0)
         .then(() => {

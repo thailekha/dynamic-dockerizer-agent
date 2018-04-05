@@ -16,7 +16,6 @@ export default keyv => {
   });
 
   router.get('/generate', (req, res) => {
-    console.log('Generating');
     res.json({key: shortid.generate()});
   });
 
