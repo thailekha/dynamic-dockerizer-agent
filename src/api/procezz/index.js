@@ -76,7 +76,7 @@ export function parseProcfs(pid, cb) {
           });
         }
 
-        exe = stdout;
+        exe = head(stdout,'\n');
         bin = head(last(exe,'/'),'\n'); //strip new line here !!!
         callback(null);
       });
@@ -89,8 +89,25 @@ export function parseProcfs(pid, cb) {
           entrypointCmd = bin;
         }
 
-        entrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
-        callback(null);
+        const unresolvedEntrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
+
+        entrypointArgs = [];
+
+        const entrypointArgsFilesResolver = unresolvedEntrypointArgs.map(f => function(asyncCallback) {
+          fs.realpath(f, (err, resolvedFile) => {
+            if (!err) {
+              entrypointArgs.push(resolvedFile);
+            } else {
+              entrypointArgs.push(f);
+            }
+            asyncCallback(null);
+          });
+        });
+
+        //must use series here to preserve args order
+        async.series(entrypointArgsFilesResolver, () => {
+          callback(null);
+        });
       });
     },
     function(callback) {
@@ -433,6 +450,8 @@ function getOpennedFiles(pid, cb) {
             return callback(err);
           }
 
+          logger.info(`Started container to trace openned files with command, to test it: docker run -i --rm --entrypoint /bin/bash vmimage -c "${command}"`);
+
           container.attach({
             stream: true,
             stdout: true,
@@ -657,7 +676,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
+      // strace is added by default to packagesSequenceck) { so length === 1 instead of length === 0
+      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.packagesSequence.length === 1 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
@@ -670,19 +690,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      const repackers = metadata
-        .packagesSequence
-        .map(p => function(asyncCallback) {
-          shell(`cd ${packagePath} && dpkg-repack ${p}`, !CHECK_STDERR_FOR_ERROR, err => {
-            if (err) {
-              return asyncCallback(err);
-            }
+      if (metadata.packagesSequence.length === 0) {
+        return callback(null);
+      }
 
-            asyncCallback(null);
-          });
-        });
-
-      async.series(repackers, err => {
+      shell(`cd ${packagePath} && dpkg-repack ${metadata.packagesSequence.join(' ')}`, !CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
             message: 'Failed to repack dependencies'
@@ -708,6 +720,28 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         extraFiles = opennedFiles.opennedFiles;
         callback(null);
       });
+    },
+    function(callback) {
+      // strace is added by default to packagesSequenceck) { so length === 1 instead of length === 0
+      if (metadata.packagesSequence.length === 1) {
+        extraFiles.push(metadata.exe);
+      }
+
+      async.parallel(
+        metadata.entrypointArgs.map(a =>
+          asyncCallback => {
+            fs.lstat(a, (err, stats) => {
+              if (!err && stats.isFile()) {
+                extraFiles.push(a);
+              }
+              asyncCallback(null);
+            });
+          }
+        ),
+        () => {
+          callback(null);
+        }
+      );
     },
     function(callback) {
       const copyExtraFiles = extraFiles.map(f => function(asyncCallback) {
@@ -752,13 +786,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           'dst': f
         }));
 
-      if (metadata.packagesSequence.length === 0) {
-        extraCopyInstructions.push({
-          'src': `extraFiles/${last(metadata.exe, '/')}`,
-          'dst': metadata.exe
-        });
-      }
-
       const copyInstructions = [
         {
           'src': 'workingDirectory',
@@ -790,7 +817,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
       const dockerfileContent = {
         'imagename': 'ubuntu',
-        'imageversion': '14.04',
+        'imageversion': config.baseimage,
         'copy': copyInstructions,
         'run': runInstructions,
         'workdir': 'workingDirectory',
