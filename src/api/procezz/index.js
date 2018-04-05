@@ -365,7 +365,7 @@ function shortenPaths(paths) {
 
     diffIndex += 1;
 
-    if (diffIndex > 2) {
+    if (diffIndex > 3) {
       shortenedPaths.push(thisPath.split('/').slice(0,diffIndex).join('/'));
     } else {
       shortenedPaths.push(thisPath);
