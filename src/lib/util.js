@@ -47,6 +47,14 @@ export function tail(string, delimitier) {
   return parts;
 }
 
+export function init(string, delimitier) {
+  const parts = string.split(delimitier);
+  if (parts.length <= 1) {
+    return null;
+  }
+  return parts.slice(0, parts.length - 1);
+}
+
 export function remove(str, toRemove) {
   var final = str;
   while (final.indexOf(toRemove) > -1) {

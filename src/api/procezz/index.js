@@ -3,7 +3,7 @@ import async from 'async';
 import {DepGraph} from 'dependency-graph';
 import fs from 'fs';
 import { exec } from 'shelljs';
-import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
+import {logger, hasAll, hasEither, last, head, tail, init, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import Docker from 'dockerode';
 import _ from 'lodash';
@@ -390,6 +390,7 @@ function shortenPaths(paths) {
 function getOpennedFiles(pid, cb) {
   let procfs, opennedFiles;
   var opennedFilesChunks = [];
+  var symlinksOpennedFiles = [];
   var resolvedOpennedFiles = []; //cater for symlinks
   var shortenedOpennedFiles = [];
 
@@ -504,8 +505,9 @@ function getOpennedFiles(pid, cb) {
         .map(line => line[1])
         .filter(path => ['/mnt','/sys','/proc','/dev','/run'].filter(ignored => path.indexOf(ignored) === 0).length === 0);
 
+      // strace picks up full dir already
       const opennedFilesResolver = opennedFiles.map(f => function(asyncCallback) {
-        fs.realpath(f, (err, resolvedFile) => {
+        fs.lstat(f, (err, stats) => {
           if (err) {
             if (err.code === 'ENOENT') {
               return asyncCallback(null); //sometimes a process create then delete a temporary file
@@ -513,8 +515,27 @@ function getOpennedFiles(pid, cb) {
             return asyncCallback(err);
           }
 
-          resolvedOpennedFiles.push(resolvedFile);
-          asyncCallback(null);
+          fs.realpath(f, (err, resolvedFile) => {
+            if (err) {
+              if (err.code === 'ENOENT') {
+                return asyncCallback(null); //broken symlink
+              }
+              return asyncCallback(err);
+            }
+
+            resolvedOpennedFiles.push(resolvedFile);
+
+            if (stats.isSymbolicLink()) {
+              symlinksOpennedFiles.push({
+                linkPath: f,
+                realPath: resolvedFile,
+                pathToCreate: init(f, '/').join('/')
+              });
+              return asyncCallback(null);
+            }
+
+            asyncCallback(null);
+          });
         });
       });
 
@@ -539,13 +560,20 @@ function getOpennedFiles(pid, cb) {
 
       shortenedOpennedFiles = shortenedPaths;
       callback(null);
+    },
+    function(callback) {
+      logger.debug(`Raw openned files: ${opennedFiles.join('\n')}`);
+      logger.debug(`Resolved openned files: ${resolvedOpennedFiles.join('\n')}`);
+      logger.debug(`Symlinks to create: ${symlinksOpennedFiles.map(i => i.toString()).join('\n')}`);
+
+      callback(null);
     }
   ],
   function(err) {
     if (err) {
       return cb(err);
     }
-    cb(null, {opennedFiles: shortenedOpennedFiles});
+    cb(null, {opennedFiles: shortenedOpennedFiles, symlinks: symlinksOpennedFiles});
   });
 }
 
@@ -624,7 +652,7 @@ function getProcessMetadata(pid, cb) {
 }
 
 export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
-  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath, extraFiles, debFiles;
+  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath, extraFiles, symlinksToCreate, debFiles;
 
   async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
@@ -745,6 +773,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         }
 
         extraFiles = opennedFiles.opennedFiles;
+        symlinksToCreate = opennedFiles.symlinks;
         callback(null);
       });
     },
@@ -804,6 +833,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         metadata.packagesSequence.length === 0 ? '' : `RUN apt-get install --no-install-recommends -f -y ${metadata.packagesSequence.join(' ')}`,
         extraFiles.map(f => `COPY extraFiles/${last(f, '/')} ${f}`).join('\n'),
+        symlinksToCreate.map(({linkPath, realPath, pathToCreate}) => `${pathToCreate ? `RUN mkdir -p ${pathToCreate}\n` : ''}RUN ln -s ${realPath} ${linkPath} || echo ignoring symlink ${linkPath}`).join('\n'),
         `COPY workingDirectory /workingDirectory`,
         `RUN chmod +x /workingDirectory/cmdScript.sh`,
         `WORKDIR workingDirectory`,
