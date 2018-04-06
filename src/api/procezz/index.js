@@ -1,7 +1,6 @@
 import config from '../../config.json';
 import async from 'async';
 import {DepGraph} from 'dependency-graph';
-import dockerfileGen from 'dockerfile-generator';
 import fs from 'fs';
 import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
@@ -300,10 +299,6 @@ export function getPackagesSequence(exe, cb) {
 
         callback(null);
       });
-    },
-    function(callback) {
-      packagesSequence.push('strace');
-      callback(null);
     }
   ],
   function(err) {
@@ -394,7 +389,6 @@ function shortenPaths(paths) {
 
 function getOpennedFiles(pid, cb) {
   let procfs, opennedFiles;
-  // const stracePath = `${APP_SPACE}/strace`;
   var opennedFilesChunks = [];
   var resolvedOpennedFiles = []; //cater for symlinks
   var shortenedOpennedFiles = [];
@@ -630,7 +624,7 @@ function getProcessMetadata(pid, cb) {
 }
 
 export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
-  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, extraFilesPath, extraFiles, debFiles, dockerfile;
+  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath, extraFiles, debFiles;
 
   async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
@@ -650,7 +644,67 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         buildPath = `${APP_SPACE}/${program}`;
         packagePath = `${buildPath}/packages`;
         workingDirectoryPath = `${buildPath}/workingDirectory`;
+        aptPath = `${buildPath}/apt`;
         extraFilesPath = `${buildPath}/extraFiles`;
+        callback(null);
+      });
+    },
+    function(callback) {
+      mkdir([buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath], err => {
+        if (err) {
+          return callback({
+            message: 'Failed to update folder for building Docker image for the process'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cp -rf /var/lib/apt ${aptPath}/varlib`, !CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to preserve apt'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cp -rf /etc/apt ${aptPath}/etc`, !CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to preserve apt'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cd ${packagePath} && dpkg-repack apt strace`, !CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to repack apt and strace'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      shell(`cd ${packagePath} && ls | grep .deb`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
+        if (err) {
+          if (err.code && err.code === 1) {
+            return callback(null);
+          }
+          return callback({
+            message: 'Failed to gather repacked dependencies .deb files'
+          });
+        }
+
+        debFiles = splitTrimFilter(stdout);
         callback(null);
       });
     },
@@ -665,39 +719,12 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      mkdir([buildPath, packagePath, workingDirectoryPath, extraFilesPath], err => {
-        if (err) {
-          return callback({
-            message: 'Failed to update folder for building Docker image for the process'
-          });
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      // strace is added by default to packagesSequenceck) { so length === 1 instead of length === 0
-      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.packagesSequence.length === 1 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
+      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
             message: 'Failed to generate run script'
-          });
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      if (metadata.packagesSequence.length === 0) {
-        return callback(null);
-      }
-
-      shell(`cd ${packagePath} && dpkg-repack ${metadata.packagesSequence.join(' ')}`, !CHECK_STDERR_FOR_ERROR, err => {
-        if (err) {
-          return callback({
-            message: 'Failed to repack dependencies'
           });
         }
 
@@ -722,8 +749,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      // strace is added by default to packagesSequenceck) { so length === 1 instead of length === 0
-      if (metadata.packagesSequence.length === 1) {
+      if (metadata.packagesSequence.length === 0) {
         extraFiles.push(metadata.exe);
       }
 
@@ -765,82 +791,29 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      shell(`cd ${packagePath} && ls | grep .deb`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
-        if (err) {
-          if (err.code && err.code === 1) {
-            return callback(null);
-          }
-          return callback({
-            message: 'Failed to gather repacked dependencies .deb files'
-          });
-        }
+      const dockerfileContent = [
+        `FROM ${config.baseimage}`,
+        `COPY packages /packages`,
+        `COPY apt /apt`,
+        `Run dpkg --purge apt`,
+        `RUN rm -rf /var/lib/apt`,
+        `RUN rm -rf /etc/apt`,
+        `RUN cp -rf /apt/varlib /var/lib/apt`,
+        `RUN cp -rf /apt/etc /etc/apt`,
+        debFiles.map(deb => `RUN dpkg -i /packages/${deb}`).join('\n'),
+        `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
+        metadata.packagesSequence.length === 0 ? '' : `RUN apt-get install --no-install-recommends -f -y ${metadata.packagesSequence.join(' ')}`,
+        extraFiles.map(f => `COPY extraFiles/${last(f, '/')} ${f}`).join('\n'),
+        `COPY workingDirectory /workingDirectory`,
+        `RUN chmod +x /workingDirectory/cmdScript.sh`,
+        `WORKDIR workingDirectory`,
+        `EXPOSE ${port}`,
+        `CMD ["./cmdScript.sh"]`,
+      ].join('\n');
 
-        debFiles = splitTrimFilter(stdout);
-        callback(null);
-      });
-    },
-    function(callback) {
-      const extraCopyInstructions = extraFiles
-        .map(f => ({
-          'src': `extraFiles/${last(f, '/')}`,
-          'dst': f
-        }));
+      logger.debug(dockerfileContent);
 
-      const copyInstructions = [
-        {
-          'src': 'workingDirectory',
-          'dst': '/workingDirectory'
-        },
-        {
-          'src': 'packages',
-          'dst': '/packages'
-        },
-        {
-          'src': 'workingDirectory/cmdScript.sh',
-          'dst': '/workingDirectory'
-        }
-      ].concat(extraCopyInstructions);
-
-      const runInstructions = [{
-        'command': 'chmod',
-        'args': ['+x', '/workingDirectory/cmdScript.sh']
-      }]
-        .concat(debFiles
-          .map(p => ({
-            'command': 'dpkg',
-            'args': ['-i','--force-depends',`/packages/${p}`,] //dependency graph took care of dependencies, so can force here
-          })));
-
-      // const installStrace = [{
-      //   'command': 'apt-get update && apt-get install -y strace'
-      // }];
-
-      const dockerfileContent = {
-        'imagename': 'ubuntu',
-        'imageversion': config.baseimage,
-        'copy': copyInstructions,
-        'run': runInstructions,
-        'workdir': 'workingDirectory',
-        'expose': [port],
-        'cmd': {
-          'command': './cmdScript.sh'
-        }
-      };
-
-      dockerfileGen.generate(JSON.stringify(dockerfileContent), (err,result) => {
-        if (err) {
-          return callback({
-            message: 'Failed to generate Dockerfile'
-          });
-        }
-
-        //dockerfile = result.replace(`RUN ["apt-get update && apt-get install -y strace"]`,"RUN apt-get update && apt-get install -y strace");
-        dockerfile = result;
-        callback(null);
-      });
-    },
-    function(callback) {
-      fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
+      fs.writeFile(`${buildPath}/Dockerfile`, dockerfileContent, err => {
         if (err) {
           return callback({
             message: 'Failed to serialize Dockerfile'
