@@ -918,7 +918,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           });
         }
 
-        shell(`cp -rf ${file} ${extraFilesPath}${file}`, CHECK_STDERR_FOR_ERROR, err => {
+        shell(`mkdir -p ${extraFilesPath}${init(file, '/').join('/')} && cp ${file} ${extraFilesPath}${init(file, '/').join('/')}/.`, CHECK_STDERR_FOR_ERROR, err => {
           if (err) {
             return asyncCallback(err);
           }
@@ -956,7 +956,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes ${metadata.packagesSequence.join(' ')}`,
         directoriesToCreate.length > 0 ? `RUN mkdir -p ${directoriesToCreate.join(multipleArgsDelimiter)}` : '',
         `COPY extraFiles /extraFiles`,
-        extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp -rf /extraFiles${file} ${file}`)).join(multipleCommandsDelimiter)}` : '',
+        extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp /extraFiles${file} ${init(file, '/').join('/')}/.`)).join(multipleCommandsDelimiter)}` : '',
         directoriesToCreateForSymlinks.length > 0 ? `RUN cd ${metadata.cwd} && mkdir -p ${directoriesToCreateForSymlinks.join(multipleArgsDelimiter)}` : '',
         symlinksToCreate.length > 0 ? `RUN ${symlinksToCreate.map(({linkPath, realPath}) => `ln -s ${realPath} ${linkPath} || echo ignoring symlink ${linkPath}`).join(multipleCommandsDelimiter)}` : '',
 
