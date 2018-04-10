@@ -340,7 +340,7 @@ function shortenPaths(paths) {
   paths.forEach((thisPath, _, array) => {
     const thisPathParts = tail(thisPath, '/'); //first is '' so skip it
 
-    if (['root', 'home', 'opt'].indexOf(thisPathParts[0]) < 0) {
+    if (['root', 'home', 'opt', 'usr'].indexOf(thisPathParts[0]) < 0) {
       return shortenedPaths.push(thisPath);
     }
 
@@ -376,13 +376,13 @@ function shortenPaths(paths) {
 }
 
 function getOpennedFiles(pid, cb) {
-  let procfs, opennedFiles;
-  // let shortenedOpennedFiles
+  let procfs, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
   const opennedFilesChunks = [];
   const opennedSymlinks = [];
   const resolvedOpennedFiles = [];
   const directoriesToCreate = [];
   const directoriesToCreateForSymlinks = [];
+  const shortenedCategorizedOpennedFiles = [];
 
   async.series([
     function(callback) {
@@ -561,7 +561,6 @@ function getOpennedFiles(pid, cb) {
       const processedFilesResolver = straceParser(['open(', 'openat('], false).map(f => function(asyncCallback) {
         var tempF = f;
         while (init(tempF, '/').join('/') && init(tempF, '/').join('/') !== tempF) {
-          console.log('loop');
           tempF = init(tempF, '/').join('/');
           if (fs.existsSync(tempF)) {
             directoriesToCreate.push(tempF);
@@ -578,24 +577,77 @@ function getOpennedFiles(pid, cb) {
           return callback(err);
         }
 
+        //keep most specific paths only
+        const mkdirMinimal = a => {
+          const array = _.uniq(_.sortBy(a, x => x.length));
+          const minimal = [];
+
+          while (array.length > 0) {
+            var f = array.shift();
+            var add = true;
+
+            for (var i = 0; i < array.length; i++) {
+              if (array[i].indexOf(f) === 0) {
+                add = false;
+                break;
+              }
+            }
+
+            if (add) {
+              minimal.push(f);
+            }
+          }
+
+          return minimal;
+        };
+
+        shortenedDirectoriesToCreate = mkdirMinimal(directoriesToCreate);
+        shortenedDirectoriesToCreateForSymlinks = mkdirMinimal(directoriesToCreateForSymlinks);
+
         callback(null);
       });
     },
-    // function(callback) {
-    //   var shortenedPaths = shortenPaths(resolvedOpennedFiles);
-    //   var tempShortenedPaths = shortenPaths(shortenedPaths);
+    function(callback) {
+      var shortenedPaths = shortenPaths(resolvedOpennedFiles);
+      var tempShortenedPaths = shortenPaths(shortenedPaths);
 
-    //   while (tempShortenedPaths.length < shortenedPaths.length) {
-    //     shortenedPaths = tempShortenedPaths;
-    //     tempShortenedPaths = shortenPaths(tempShortenedPaths);
-    //   }
+      while (tempShortenedPaths.length < shortenedPaths.length) {
+        shortenedPaths = tempShortenedPaths;
+        tempShortenedPaths = shortenPaths(tempShortenedPaths);
+      }
 
-    //   shortenedOpennedFiles = shortenedPaths;
-    //   callback(null);
-    // },
+      shortenedOpennedFiles = shortenedPaths;
+      callback(null);
+    },
+    function(callback) {
+      const shortenedOpennedFilesCategorizer = _.uniq(shortenedOpennedFiles).map(f => asyncCallback => {
+        fs.lstat(f, (err, stats) => {
+          if (err) {
+            return asyncCallback(err);
+          }
+          shortenedCategorizedOpennedFiles.push({file: f, isDirectory: stats.isDirectory()});
+          asyncCallback(null);
+        });
+      });
+
+      async.parallel(shortenedOpennedFilesCategorizer, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to categorize opennedFiles'
+          });
+        }
+
+        callback(null);
+      });
+    },
     function(callback) {
       logger.debug(`Raw openned files: ${opennedFiles.join('\n')}`);
       logger.debug(`Symlinks to create: ${opennedSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`directories to create for symlinks: ${directoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`directories to create for symlinks: ${directoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`shortenedPaths: ${shortenedCategorizedOpennedFiles.map(i => JSON.stringify(i)).join('\n')}`);
 
       callback(null);
     }
@@ -604,7 +656,11 @@ function getOpennedFiles(pid, cb) {
     if (err) {
       return cb(err);
     }
-    cb(null, {opennedFiles: _.uniq(resolvedOpennedFiles), symlinks: opennedSymlinks, directories: _.uniq(directoriesToCreate.filter(d => d)), symlinkDirectories: _.uniq(directoriesToCreateForSymlinks.filter(d => d)) });
+    cb(null, {
+      opennedFiles: shortenedCategorizedOpennedFiles,
+      symlinks: opennedSymlinks,
+      directories: _.uniq(shortenedDirectoriesToCreate),
+      symlinkDirectories: _.uniq(shortenedDirectoriesToCreateForSymlinks) });
   });
 }
 
@@ -778,7 +834,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      const runScriptContent = `#!/bin/bash\\n strace -fe trace=process ${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
+      const runScriptContent = `#!/bin/bash\\n strace -o /dev/null -fe trace=process ${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
 
       shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
@@ -812,15 +868,18 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       if (metadata.packagesSequence.length === 0) {
-        extraFiles.push(metadata.exe);
+        extraFiles.push({file: metadata.exe, isDirectory: false});
       }
 
       async.parallel(
         metadata.entrypointArgs.map(a =>
           asyncCallback => {
             fs.lstat(a, (err, stats) => {
-              if (!err && stats.isFile()) {
-                extraFiles.push(a);
+              if (!err) {
+                extraFiles.push({
+                  file: a,
+                  isDirectory: stats.isDirectory()
+                });
               }
               asyncCallback(null);
             });
@@ -832,7 +891,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       );
     },
     function(callback) {
-      shell(`mkdir -p ${directoriesToCreate.map(d => `${extraFilesPath}${d}`).join(' ')}`, CHECK_STDERR_FOR_ERROR, err => {
+      if (directoriesToCreate.length === 0) {
+        return callback(null);
+      }
+
+      mkdir(directoriesToCreate.map(d => `${extraFilesPath}${d}`), err => {
         if (err) {
           return callback(err);
         }
@@ -841,8 +904,18 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      const copyExtraFiles = extraFiles.map(f => function(asyncCallback) {
-        shell(`cp -rf ${f} ${extraFilesPath}${f}`, CHECK_STDERR_FOR_ERROR, err => {
+      const copyExtraFiles = extraFiles.map(({file, isDirectory}) => function(asyncCallback) {
+        if (isDirectory) {
+          return shell(`rsync -avW --update ${file}/ ${extraFilesPath}${file}`, CHECK_STDERR_FOR_ERROR, err => {
+            if (err) {
+              return asyncCallback(err);
+            }
+
+            asyncCallback(null);
+          });
+        }
+
+        shell(`cp -rf ${file} ${extraFilesPath}${file}`, CHECK_STDERR_FOR_ERROR, err => {
           if (err) {
             return asyncCallback(err);
           }
@@ -851,7 +924,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         });
       });
 
-      async.parallel(copyExtraFiles, err => {
+      async.series(copyExtraFiles, err => {
         if (err) {
           return callback({
             message: 'Failed to import files that process openned'
@@ -870,21 +943,26 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         `COPY packages /packages`,
         `COPY apt /apt`,
         // `Run dpkg --purge apt`,
-        `RUN rm -rf /var/lib/apt/*`,
-        `RUN rm -rf /etc/apt/*`,
-        `RUN cp -rf /apt/varlib/* /var/lib/apt/.`,
-        `RUN cp -rf /apt/etc/* /etc/apt/.`,
+        `RUN rm -rf /var/lib/apt/*; \\`,
+        `  rm -rf /etc/apt/*; \\`,
+        `  cp -rf /apt/varlib/* /var/lib/apt/.; \\`,
+        `  cp -rf /apt/etc/* /etc/apt/.;`,
         debFiles.map(deb => `RUN dpkg -i /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
-        metadata.packagesSequence.length === 0 ? '' : `RUN apt-get install --no-install-recommends -f -y --force-yes ${metadata.packagesSequence.join(' ')}`,
-        `RUN rm -rf /var/lib/apt/lists/*`,  //reduce image size
+        metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes ${metadata.packagesSequence.join(' ')}`,
         directoriesToCreate.length > 0 ? `RUN mkdir -p ${directoriesToCreate.join(multipleArgsDelimiter)}` : '',
         `COPY extraFiles /extraFiles`,
-        extraFiles.length > 0 ? `RUN ${extraFiles.map(f => `cp -rf /extraFiles${f} ${f}`).join(multipleCommandsDelimiter)}` : '',
-        `RUN rm -rf /extraFiles`,
+        extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp -rf /extraFiles${file} ${file}`)).join(multipleCommandsDelimiter)}` : '',
         directoriesToCreateForSymlinks.length > 0 ? `RUN cd ${metadata.cwd} && mkdir -p ${directoriesToCreateForSymlinks.join(multipleArgsDelimiter)}` : '',
         symlinksToCreate.length > 0 ? `RUN ${symlinksToCreate.map(({linkPath, realPath}) => `ln -s ${realPath} ${linkPath} || echo ignoring symlink ${linkPath}`).join(multipleCommandsDelimiter)}` : '',
+
+        //Clean up and reduce image size
+        `RUN rm -rf /var/lib/apt/lists/*; \\`,
+        `  rm -rf /var/cache/apt/*; \\`,
+        `  rm -rf /packages; \\`,
+        `  rm -rf /apt; \\`,
+        `  rm -rf /extraFiles;`,
         `COPY workingDirectory /workingDirectory`,
         `RUN chmod +x /workingDirectory/cmdScript.sh`,
         `WORKDIR workingDirectory`,

@@ -92,7 +92,7 @@ export function mkdir(paths, cb) {
     });
   });
 
-  async.series(pathsBuilders, function(err) {
+  async.parallel(pathsBuilders, function(err) {
     if (err) {
       return cb(err);
     }
