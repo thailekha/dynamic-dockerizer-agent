@@ -5,18 +5,17 @@ import fs from 'fs';
 import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, init, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
-import Docker from 'dockerode';
 import _ from 'lodash';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
 
-const docker = new Docker({
-  socketPath: '/var/run/docker.sock'
-});
+function pidCommand(command, escapeDollarSign = true) {
+  return `${escapeDollarSign ? '\\$' : '$'}(pidof ${command} | sed 's/\\([0-9]*\\)/-p \\1/g')`;
+}
 
 export function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
-  exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', (code, stdout, stderr) => {
+  exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', {silent:true}, (code, stdout, stderr) => {
     // if terraform command time out, no response is returned by express, why?
     if (code !== 0 || stderr) {
       return cb({
@@ -81,7 +80,7 @@ export function parseProcfs(pid, cb) {
       });
     },
     function(callback) {
-      exec(`which ${bin}`, (code, _, stderr) => {
+      exec(`which ${bin}`, {silent:true}, (code, _, stderr) => {
         if (code !== 0 || stderr) {
           entrypointCmd = head(exe,'\n');
         } else {
@@ -272,7 +271,7 @@ export function getPackagesSequence(exe, cb) {
     function(callback) {
       const filterDepsCommand = `docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "for PACKAGE in ${dependencyGraph.overallOrder().join(' ')}; do if ! dpkg -L \\$PACKAGE &>/dev/null; then echo \\$PACKAGE; fi; done"`;
       logger.debug(`Filtering dependencies that are already installed in baseimage with command: ${filterDepsCommand}`);
-      exec(filterDepsCommand, (code, stdout) => {
+      exec(filterDepsCommand, {silent:true}, (code, stdout) => {
         if (code !== 0) {
           return callback({
             message: 'Failed to filter the package dependency graph'
@@ -376,8 +375,8 @@ function shortenPaths(paths) {
 }
 
 function getOpennedFiles(pid, cb) {
-  let procfs, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
-  const opennedFilesChunks = [];
+  let procfs, traceCode, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
+  var traceOutput = "";
   const opennedSymlinks = [];
   const resolvedOpennedFiles = [];
   const directoriesToCreate = [];
@@ -405,102 +404,102 @@ function getOpennedFiles(pid, cb) {
       });
     },
     function(callback) {
-      const command = [
-        `cd ${procfs.cwd} &&`,
-        `strace -fe trace=file ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')}`,
-      ].join(' ');
-
-      const STRACE_CONTAINER = {
-        Image: config.vmimage,
-        AttachStdin: false,
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: true,
-        Cmd: ['/bin/bash', '-c', command],
-        OpenStdin: false,
-        StdinOnce: false
-      };
-
-      docker.createContainer(STRACE_CONTAINER, function(err, container) {
+      shell(`kill ${pid}`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
-          const errMsg = 'Failed to create strace container';
-          err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-          return callback(err);
-        }
-
-        container.start((err, data) => {
-          if (err || data === null) {
-            const errMsg = 'Failed to start strace container';
-            err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-            return callback(err);
-          }
-
-          logger.info(`Started container to trace openned files with command, to test it: docker run -i --rm --entrypoint /bin/bash vmimage -c "${command}"`);
-
-          container.attach({
-            stream: true,
-            stdout: true,
-            stderr: true,
-            tty: true
-          }, (err, stream) => {
-            if (err) {
-              const errMsg = 'Failed to attach to strace container';
-              err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-              return callback(err);
-            }
-
-            stream.on('data', chunk => opennedFilesChunks.push(chunk));
-
-            setTimeout(() => {
-              const straceKiller = setInterval(() => {
-                const removeContainer = cb => {
-                  shell(`docker rm -f ${container.id}`, CHECK_STDERR_FOR_ERROR, err => {
-                    if (err) {
-                      return cb({
-                        message: 'Failed to stop tracing for openned files'
-                      });
-                    }
-
-                    cb(null);
-                  });
-                };
-
-                shell(`docker ps | grep ${container.id}`, CHECK_STDERR_FOR_ERROR, err => {
-                  if (err && err.code === 1) {
-                    // container not running
-                    clearInterval(straceKiller);
-                    return removeContainer(callback);
-                  }
-
-                  //remove strace container if the strace process in it enters the sleep state
-                  shell(`docker exec ${container.id} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
-                    if (err && err.code === 1) {
-                      logger.debug('strace interval');
-                      return;
-                    }
-
-                    clearInterval(straceKiller);
-
-                    if (err) {
-                      return callback({
-                        message: 'Failed to stop tracing for openned files'
-                      });
-                    }
-
-                    removeContainer(callback);
-                  });
-                });
-              }, 1000);
-            }, 1000 * 60 * 1);
+          return callback({
+            message: 'Failed to kill the process'
           });
-        });
+        }
+        callback(null);
       });
     },
     function(callback) {
+      //container created by dockerode  cannot be connected to host network
+      //would give `server error - container cannot be disconnected from host network or connected to host network`
+      const straceCommand = [
+        `cd ${procfs.cwd} &&`,
+        `strace -fe trace=file ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &&`,
+        `echo strace attach ${pidCommand(procfs.entrypointCmd)} &&`,
+        `strace -fe trace=file ${pidCommand(procfs.entrypointCmd)}`
+      ].join(' ');
+
+      const straceContainerCommand = `docker run --name strace-${pid} --network=host -i --rm --privileged --entrypoint /bin/bash ${config.vmimage} -c "${straceCommand}"`;
+
+      logger.info(`Starting container to trace openned files with command, to test it: ${straceContainerCommand}`);
+
+      exec(straceContainerCommand, {silent:true}, (code, _, stderr) => {
+        //this block is called only after the container has exited
+        traceCode = code;
+        traceOutput += stderr; //strace outputs to stderr
+      });
+
+      callback(null);
+    },
+    function(callback) {
+      setTimeout(() => {
+        logger.info(`Preparing to kill strace container`);
+        const straceKiller = setInterval(() => {
+          const removeContainer = cb => {
+            shell(`docker rm -f strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
+              if (err) {
+                return cb({
+                  message: 'Failed to stop tracing for openned files'
+                });
+              }
+
+              cb(null);
+            });
+          };
+
+          shell(`docker ps | grep strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
+            if (err && err.code === 1) {
+              // container not running
+              if (traceCode !== 0) {
+                clearInterval(straceKiller);
+                return callback({
+                  message: 'Failed to run strace container'
+                });
+              }
+
+              clearInterval(straceKiller);
+              return removeContainer(callback);
+            }
+
+            //remove strace container if the strace process in it enters the sleep state
+            shell(`docker exec strace-${pid} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
+              if (err && err.code === 1) {
+                logger.debug('strace interval');
+                return;
+              }
+
+              clearInterval(straceKiller);
+
+              if (err) {
+                return callback({
+                  message: 'Failed to stop tracing for openned files'
+                });
+              }
+
+              removeContainer(callback);
+            });
+          });
+        }, 1000);
+      }, 1000 * 60 * 0.5);
+    },
+    function(callback) {
+      logger.info('Restarting the process');
+      shell(`cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`, CHECK_STDERR_FOR_ERROR, () => {
+        // if (err) {
+        //   return callback({
+        //     message: 'Failed to restart the process'
+        //   });
+        // }
+      });
+      callback(null);
+    },
+    function(callback) {
       const straceParser = (syscalls, match = true) =>
-        Buffer
-          .concat(opennedFilesChunks)
-          .toString()
+        traceOutput
           .split(`\n`)
           .filter(line => line.indexOf('("') > -1 && line.indexOf('= -1') < 0)
           .map(line => line.split(`"`))
@@ -834,9 +833,13 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      const runScriptContent = `#!/bin/bash\\n strace -o /dev/null -fe trace=process ${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')}`;
+      const mainCommand = `${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd}`;
+      const straceCommand = `strace -o /dev/null -fe trace=process ${mainCommand} ${metadata.entrypointArgs.join(' ')} && echo strace attach ${pidCommand(mainCommand, false)} && strace -o /dev/null -fe trace=process ${pidCommand(mainCommand, false)}`;
+      const runScriptContent = `#!/bin/bash\n${straceCommand}`;
 
-      shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
+      logger.debug(`Runscript: ${runScriptContent}`);
+
+      fs.writeFile(`${workingDirectoryPath}/cmdScript.sh`, runScriptContent, err => {
         if (err) {
           return callback({
             message: 'Failed to generate run script'
