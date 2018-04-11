@@ -61,7 +61,33 @@ jobs:
       - yarn install
       - npm run build
       script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep process --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep listprocess --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
+      - sudo apt-get install nginx
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep inspectprocess --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      services:
+      - docker
+      before_script:
+      - sudo apt-get install nginx
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertprocess --timeout 600000 --exit
+      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - curl localhost:80
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
@@ -71,8 +97,18 @@ jobs:
       - yarn install
       - npm run build
       script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep foo --timeout 20000 --exit
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep inspectunexistedprocess --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     # =======================
     # E2E tests (end)

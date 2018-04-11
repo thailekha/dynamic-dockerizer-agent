@@ -384,6 +384,7 @@ function getOpennedFiles(pid, cb) {
   var directoriesToCreate = [];
   const directoriesToCreateForSymlinks = [];
   const shortenedCategorizedOpennedFiles = [];
+  const parentSymlinks = [];
 
   async.series([
     function(callback) {
@@ -576,6 +577,10 @@ function getOpennedFiles(pid, cb) {
               logger.debug(`Resolved ${f} to ${resolvedFile}`);
             }
 
+            if (init(f, '/') && init(resolvedFile, '/') && init(f, '/').join('/') !== init(resolvedFile, '/').join('/')) {
+              parentSymlinks.push(f);
+            }
+
             resolvedOpennedFiles.push(resolvedFile);
 
             if (stats.isSymbolicLink()) {
@@ -720,23 +725,6 @@ export function inspectProcess(keyv, progressKey, pid, cb) {
         metadata = meta;
         callback(null);
       });
-    },
-    function(callback) {
-      getOpennedFiles(pid, (err, opennedFiles) => {
-        if (err || !opennedFiles || !opennedFiles.opennedFiles) {
-          const errMsg = 'Failed to collect files that process openned';
-          if (err) {
-            err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-            return callback(err);
-          }
-          return callback({
-            message: errMsg
-          });
-        }
-
-        metadata.opennedFiles = opennedFiles.opennedFiles;
-        callback(null);
-      });
     }
   ]),
   function(err) {
@@ -841,7 +829,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      shell(`cd ${packagePath} && dpkg-repack apt strace`, !CHECK_STDERR_FOR_ERROR, err => {
+      shell(`cd ${packagePath} && dpkg-repack strace`, !CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
             message: 'Failed to repack apt and strace'
@@ -998,7 +986,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         `  rm -rf /etc/apt/*; \\`,
         `  cp -rf /apt/varlib/* /var/lib/apt/.; \\`,
         `  cp -rf /apt/etc/* /etc/apt/.;`,
-        debFiles.map(deb => `RUN dpkg -i /packages/${deb}`).join('\n'),
+        debFiles.map(deb => `RUN dpkg -i --force-breaks /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
         metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes rsync ${metadata.packagesSequence.join(' ')}`,
