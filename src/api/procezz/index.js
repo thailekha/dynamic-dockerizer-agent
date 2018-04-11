@@ -375,7 +375,7 @@ function shortenPaths(paths) {
 }
 
 function getOpennedFiles(pid, cb) {
-  let procfs, traceCode, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
+  let procfs, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
   var traceOutput = "";
   const opennedSymlinks = [];
   const resolvedOpennedFiles = [];
@@ -427,10 +427,8 @@ function getOpennedFiles(pid, cb) {
 
       logger.info(`Starting container to trace openned files with command, to test it: ${straceContainerCommand}`);
 
-      exec(straceContainerCommand, {silent:true}, (code, _, stderr) => {
-        //this block is called only after the container has exited
-        traceCode = code;
-        traceOutput += stderr; //strace outputs to stderr
+      exec(straceContainerCommand, {silent:true, async:true}).stderr.on('data', data => {
+        traceOutput += data;
       });
 
       callback(null);
@@ -438,7 +436,16 @@ function getOpennedFiles(pid, cb) {
     function(callback) {
       setTimeout(() => {
         logger.info(`Preparing to kill strace container`);
+        var lock = false;
         const straceKiller = setInterval(() => {
+
+          if (lock) {
+            logger.debug('Strace killer is blocked');
+            return;
+          }
+
+          lock = true;
+
           const removeContainer = cb => {
             shell(`docker rm -f strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
               if (err) {
@@ -454,13 +461,6 @@ function getOpennedFiles(pid, cb) {
           shell(`docker ps | grep strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
             if (err && err.code === 1) {
               // container not running
-              if (traceCode !== 0) {
-                clearInterval(straceKiller);
-                return callback({
-                  message: 'Failed to run strace container'
-                });
-              }
-
               clearInterval(straceKiller);
               return removeContainer(callback);
             }
@@ -469,6 +469,7 @@ function getOpennedFiles(pid, cb) {
             shell(`docker exec strace-${pid} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
               if (err && err.code === 1) {
                 logger.debug('strace interval');
+                lock = false;
                 return;
               }
 
@@ -484,7 +485,7 @@ function getOpennedFiles(pid, cb) {
             });
           });
         }, 1000);
-      }, 1000 * 60 * 0.5);
+      }, 1000 * 60 * 1);
     },
     function(callback) {
       logger.info('Restarting the process');
