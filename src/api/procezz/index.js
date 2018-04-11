@@ -9,6 +9,8 @@ import _ from 'lodash';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
+const IGNORED_PATHS = ['/mnt','/sys','/proc','/dev','/run','/tmp/dd-agent'];
+const IGNORED_PATHS_FOR_SHORTENING = ['root', 'home', 'opt', 'usr'];
 
 function pidCommand(command, escapeDollarSign = true) {
   return `${escapeDollarSign ? '\\$' : '$'}(pidof ${command} | sed 's/\\([0-9]*\\)/-p \\1/g')`;
@@ -339,7 +341,7 @@ function shortenPaths(paths) {
   paths.forEach((thisPath, _, array) => {
     const thisPathParts = tail(thisPath, '/'); //first is '' so skip it
 
-    if (['root', 'home', 'opt', 'usr'].indexOf(thisPathParts[0]) < 0) {
+    if (IGNORED_PATHS_FOR_SHORTENING.indexOf(thisPathParts[0]) < 0) {
       return shortenedPaths.push(thisPath);
     }
 
@@ -378,8 +380,8 @@ function getOpennedFiles(pid, cb) {
   let procfs, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
   var traceOutput = "";
   const opennedSymlinks = [];
-  const resolvedOpennedFiles = [];
-  const directoriesToCreate = [];
+  var resolvedOpennedFiles = [];
+  var directoriesToCreate = [];
   const directoriesToCreateForSymlinks = [];
   const shortenedCategorizedOpennedFiles = [];
 
@@ -401,6 +403,51 @@ function getOpennedFiles(pid, cb) {
 
         procfs = proc;
         callback(null);
+      });
+    },
+    function(callback) {
+      fs.readdir(`/proc/${pid}/fd`, function(err, items) {
+        if (err) {
+          return callback({
+            message: 'Failed to read files currently openned by the process'
+          });
+        }
+
+        const currentlyOpennedFilesResolver = items.map(i => asyncCallback => {
+          fs.realpath(`/proc/${pid}/fd/${i}`, (err, resolvedFile) => {
+            if (err) {
+              return asyncCallback(null);
+            }
+
+            fs.lstat(resolvedFile, (err, resolvedFileStats) => {
+              if (err) {
+                return asyncCallback(null);
+              }
+
+              resolvedOpennedFiles.push(resolvedFile);
+
+              if (resolvedFileStats.isDirectory()) {
+                directoriesToCreate.push(resolvedFile);
+              } else {
+                directoriesToCreate.push(init(resolvedFile, '/').join('/'));
+              }
+
+              asyncCallback(null);
+            });
+          });
+        });
+
+        async.parallel(currentlyOpennedFilesResolver, err => {
+          if (err) {
+            return callback({
+              message: 'Failed to read files currently openned by the process'
+            });
+          }
+
+          resolvedOpennedFiles = resolvedOpennedFiles.filter(f => IGNORED_PATHS.filter(ignored => f.indexOf(ignored) === 0).length === 0);
+          directoriesToCreate = directoriesToCreate.filter(f => IGNORED_PATHS.filter(ignored => f.indexOf(ignored) === 0).length === 0);
+          callback(null);
+        });
       });
     },
     function(callback) {
@@ -501,7 +548,7 @@ function getOpennedFiles(pid, cb) {
           .filter(lineParts => lineParts.length > 1 && (match ? syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length > 0 : syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length === 0))
         // .filter(lineParts => lineParts.length > 1)
           .map(line => line[1])
-          .filter(path => ['/mnt','/sys','/proc','/dev','/run','/tmp/dd-agent'].filter(ignored => path.indexOf(ignored) === 0).length === 0)
+          .filter(path => IGNORED_PATHS.filter(ignored => path.indexOf(ignored) === 0).length === 0)
           .filter(path => '/tmp' !== path); //edge case
 
       opennedFiles = straceParser(['open(', 'openat(']);
@@ -637,10 +684,10 @@ function getOpennedFiles(pid, cb) {
     function(callback) {
       logger.debug(`Raw openned files: ${opennedFiles.join('\n')}`);
       logger.debug(`Symlinks to create: ${opennedSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`directories to create for symlinks: ${directoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`directories to create: ${directoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
       logger.debug(`directories to create for symlinks: ${directoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
       logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`shortened directories to create for symlinks: ${shortenedDirectoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
       logger.debug(`shortenedPaths: ${shortenedCategorizedOpennedFiles.map(i => JSON.stringify(i)).join('\n')}`);
 
       callback(null);
