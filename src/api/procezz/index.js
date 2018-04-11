@@ -10,7 +10,7 @@ import _ from 'lodash';
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
 const IGNORED_PATHS = ['/mnt','/sys','/proc','/dev','/run','/tmp/dd-agent'];
-const IGNORED_PATHS_FOR_SHORTENING = ['root', 'home', 'opt', 'usr'];
+const ACCEPTED_PATHS_FOR_SHORTENING = ['root', 'home', 'opt', 'usr', 'var'];
 
 function pidCommand(command, escapeDollarSign = true) {
   return `${escapeDollarSign ? '\\$' : '$'}(pidof ${command} | sed 's/\\([0-9]*\\)/-p \\1/g')`;
@@ -341,7 +341,7 @@ function shortenPaths(paths) {
   paths.forEach((thisPath, _, array) => {
     const thisPathParts = tail(thisPath, '/'); //first is '' so skip it
 
-    if (IGNORED_PATHS_FOR_SHORTENING.indexOf(thisPathParts[0]) < 0) {
+    if (ACCEPTED_PATHS_FOR_SHORTENING.indexOf(thisPathParts[0]) < 0) {
       return shortenedPaths.push(thisPath);
     }
 
@@ -995,7 +995,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         debFiles.map(deb => `RUN dpkg -i /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
-        metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes ${metadata.packagesSequence.join(' ')}`,
+        metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes rsync ${metadata.packagesSequence.join(' ')}`,
         directoriesToCreate.length > 0 ? `RUN mkdir -p ${directoriesToCreate.join(multipleArgsDelimiter)}` : '',
         `COPY extraFiles /extraFiles`,
         extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp /extraFiles${file} ${init(file, '/').join('/')}/.`)).join(multipleCommandsDelimiter)}` : '',
