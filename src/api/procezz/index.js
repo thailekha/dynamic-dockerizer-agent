@@ -428,7 +428,7 @@ function getOpennedFiles(pid, cb) {
 
               if (resolvedFileStats.isDirectory()) {
                 directoriesToCreate.push(resolvedFile);
-              } else {
+              } else if (init(resolvedFile, '/')) {
                 directoriesToCreate.push(init(resolvedFile, '/').join('/'));
               }
 
@@ -579,7 +579,9 @@ function getOpennedFiles(pid, cb) {
             resolvedOpennedFiles.push(resolvedFile);
 
             if (stats.isSymbolicLink()) {
-              directoriesToCreateForSymlinks.push(init(f, '/').join('/'));
+              if (init(f, '/')) {
+                directoriesToCreateForSymlinks.push(init(f, '/').join('/'));
+              }
               opennedSymlinks.push({
                 linkPath: f,
                 realPath: resolvedFile
@@ -589,7 +591,7 @@ function getOpennedFiles(pid, cb) {
             fs.lstat(resolvedFile, (_, resolvedFileStats) => {
               if (resolvedFileStats.isDirectory()) {
                 directoriesToCreate.push(resolvedFile);
-              } else {
+              } else if (init(resolvedFile, '/')) {
                 directoriesToCreate.push(init(resolvedFile, '/').join('/'));
               }
 
@@ -601,7 +603,7 @@ function getOpennedFiles(pid, cb) {
 
       const processedFilesResolver = straceParser(['open(', 'openat('], false).map(f => function(asyncCallback) {
         var tempF = f;
-        while (init(tempF, '/').join('/') && init(tempF, '/').join('/') !== tempF) {
+        while (init(tempF, '/') && init(tempF, '/').join('/') && init(tempF, '/').join('/') !== tempF) {
           tempF = init(tempF, '/').join('/');
           if (fs.existsSync(tempF)) {
             directoriesToCreate.push(tempF);
@@ -958,6 +960,10 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
             asyncCallback(null);
           });
+        }
+
+        if (!init(file, '/')) {
+          return asyncCallback(null);
         }
 
         shell(`mkdir -p ${extraFilesPath}${init(file, '/').join('/')} && cp ${file} ${extraFilesPath}${init(file, '/').join('/')}/.`, CHECK_STDERR_FOR_ERROR, err => {
