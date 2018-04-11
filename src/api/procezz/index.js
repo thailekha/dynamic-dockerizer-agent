@@ -489,13 +489,7 @@ function getOpennedFiles(pid, cb) {
     },
     function(callback) {
       logger.info('Restarting the process');
-      shell(`cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`, CHECK_STDERR_FOR_ERROR, () => {
-        // if (err) {
-        //   return callback({
-        //     message: 'Failed to restart the process'
-        //   });
-        // }
-      });
+      exec(`cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`, {silent:true, async:true});
       callback(null);
     },
     function(callback) {
