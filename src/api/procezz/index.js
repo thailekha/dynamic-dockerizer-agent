@@ -1034,8 +1034,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         // `Run dpkg --purge apt`,
         `RUN rm -rf /var/lib/apt/* || echo Failed to overwrite apt settings; \\`,
         `  rm -rf /etc/apt/* || echo Failed to overwrite apt settings; \\`,
-        `  cp -rf /apt/varlib/* /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
-        `  cp -rf /apt/etc/* /etc/apt/. || echo Failed to overwrite apt settings;`,
+        `  cp -rf /apt/varlib/. /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
+        `  cp -rf /apt/etc/. /etc/apt/. || echo Failed to overwrite apt settings;`,
         debFiles.map(deb => `RUN dpkg -i --force-breaks /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
@@ -1050,10 +1050,10 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
             parentSymlinks.map(({linkPath, realPath}) => {
               const tempDirId = shortid.generate();
               return [`mkdir /tmp/${tempDirId}`,
-                `cp -r ${linkPath}/* /tmp/${tempDirId}/.`,
+                `cp -rf ${linkPath}/. /tmp/${tempDirId}/.`,
                 `rm -rf ${linkPath}`,
                 `ln -s ${realPath} ${linkPath}`,
-                `cp -r /tmp/${tempDirId}/* ${realPath}/.`,
+                `cp -rf /tmp/${tempDirId}/. ${realPath}/.`,
                 `rm -rf /tmp/${tempDirId}`,].join(' && ');
             }).join(multipleCommandsDelimiter)
           }` : '',
