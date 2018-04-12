@@ -1032,10 +1032,10 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         `COPY packages /packages`,
         `COPY apt /apt`,
         // `Run dpkg --purge apt`,
-        `RUN rm -rf /var/lib/apt/*; \\`,
-        `  rm -rf /etc/apt/*; \\`,
-        `  cp -rf /apt/varlib/* /var/lib/apt/.; \\`,
-        `  cp -rf /apt/etc/* /etc/apt/.;`,
+        `RUN rm -rf /var/lib/apt/* || echo Failed to overwrite apt settings; \\`,
+        `  rm -rf /etc/apt/* || echo Failed to overwrite apt settings; \\`,
+        `  cp -rf /apt/varlib/* /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
+        `  cp -rf /apt/etc/* /etc/apt/. || echo Failed to overwrite apt settings;`,
         debFiles.map(deb => `RUN dpkg -i --force-breaks /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
@@ -1056,8 +1056,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
                 `cp -r /tmp/${tempDirId}/* ${realPath}/.`,
                 `rm -rf /tmp/${tempDirId}`,].join(' && ');
             }).join(multipleCommandsDelimiter)
-          }`
-          : '',
+          }` : '',
 
         //Clean up and reduce image size
         `RUN rm -rf /var/lib/apt/lists/*; \\`,
