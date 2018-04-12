@@ -6,6 +6,7 @@ import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, init, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import _ from 'lodash';
+import shortid from 'shortid';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
@@ -384,6 +385,7 @@ function getOpennedFiles(pid, cb) {
   var directoriesToCreate = [];
   const directoriesToCreateForSymlinks = [];
   const shortenedCategorizedOpennedFiles = [];
+  const potentialParentSymlinks = [];
   const parentSymlinks = [];
 
   async.series([
@@ -578,7 +580,7 @@ function getOpennedFiles(pid, cb) {
             }
 
             if (init(f, '/') && init(resolvedFile, '/') && init(f, '/').join('/') !== init(resolvedFile, '/').join('/')) {
-              parentSymlinks.push(f);
+              potentialParentSymlinks.push(init(f, '/').join('/'));
             }
 
             resolvedOpennedFiles.push(resolvedFile);
@@ -656,6 +658,37 @@ function getOpennedFiles(pid, cb) {
       });
     },
     function(callback) {
+      const potentialParentSymlinksResolver = potentialParentSymlinks.map(l => asyncCallback => {
+        //keep calling init till null
+        var tempL = l;
+        while (tempL) {
+          if (fs.lstatSync(tempL).isSymbolicLink()) {
+            parentSymlinks.push({
+              linkPath: tempL,
+              realPath: fs.realpathSync(tempL)
+            });
+          }
+
+          tempL = init(tempL, '/');
+          if (tempL) {
+            tempL = tempL.join('/');
+          }
+        }
+
+        asyncCallback(null);
+      });
+
+      async.series(potentialParentSymlinksResolver, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to collect parent symlinks'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
       var shortenedPaths = shortenPaths(resolvedOpennedFiles);
       var tempShortenedPaths = shortenPaths(shortenedPaths);
 
@@ -696,6 +729,7 @@ function getOpennedFiles(pid, cb) {
       logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
       logger.debug(`shortened directories to create for symlinks: ${shortenedDirectoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
       logger.debug(`shortenedPaths: ${shortenedCategorizedOpennedFiles.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`parentSymlinks: ${parentSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
 
       callback(null);
     }
@@ -708,7 +742,9 @@ function getOpennedFiles(pid, cb) {
       opennedFiles: shortenedCategorizedOpennedFiles,
       symlinks: opennedSymlinks,
       directories: _.uniq(shortenedDirectoriesToCreate),
-      symlinkDirectories: _.uniq(shortenedDirectoriesToCreateForSymlinks) });
+      symlinkDirectories: _.uniq(shortenedDirectoriesToCreateForSymlinks),
+      parentSymlinks: _.uniqBy(parentSymlinks, ps => ps.linkPath)
+    });
   });
 }
 
@@ -770,7 +806,20 @@ function getProcessMetadata(pid, cb) {
 }
 
 export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
-  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath, directoriesToCreate, directoriesToCreateForSymlinks, extraFiles, symlinksToCreate, debFiles;
+  let port
+    , program
+    , metadata
+    , buildPath
+    , packagePath
+    , workingDirectoryPath
+    , aptPath
+    , extraFilesPath
+    , directoriesToCreate
+    , directoriesToCreateForSymlinks
+    , extraFiles
+    , symlinksToCreate
+    , parentSymlinks
+    , debFiles;
 
   async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
@@ -898,6 +947,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         symlinksToCreate = opennedFiles.symlinks;
         directoriesToCreate = opennedFiles.directories;
         directoriesToCreateForSymlinks = opennedFiles.symlinkDirectories;
+        parentSymlinks = opennedFiles.parentSymlinks;
         callback(null);
       });
     },
@@ -995,6 +1045,19 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp /extraFiles${file} ${init(file, '/').join('/')}/.`)).join(multipleCommandsDelimiter)}` : '',
         directoriesToCreateForSymlinks.length > 0 ? `RUN cd ${metadata.cwd} && mkdir -p ${directoriesToCreateForSymlinks.join(multipleArgsDelimiter)}` : '',
         symlinksToCreate.length > 0 ? `RUN ${symlinksToCreate.map(({linkPath, realPath}) => `ln -s ${realPath} ${linkPath} || echo ignoring symlink ${linkPath}`).join(multipleCommandsDelimiter)}` : '',
+        parentSymlinks.length > 0 ?
+          `RUN ${
+            parentSymlinks.map(({linkPath, realPath}) => {
+              const tempDirId = shortid.generate();
+              return [`mkdir /tmp/${tempDirId}`,
+                `cp -r ${linkPath}/* /tmp/${tempDirId}/.`,
+                `rm -rf ${linkPath}`,
+                `ln -s ${realPath} ${linkPath}`,
+                `cp -r /tmp/${tempDirId}/* ${realPath}/.`,
+                `rm -rf /tmp/${tempDirId}`,].join(' && ');
+            }).join(multipleCommandsDelimiter)
+          }`
+          : '',
 
         //Clean up and reduce image size
         `RUN rm -rf /var/lib/apt/lists/*; \\`,
