@@ -6,7 +6,6 @@ import { exec } from 'shelljs';
 import {logger, hasAll, hasEither, last, head, tail, init, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import _ from 'lodash';
-import shortid from 'shortid';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
@@ -378,15 +377,13 @@ function shortenPaths(paths) {
 }
 
 function getOpennedFiles(pid, cb) {
-  let procfs, opennedFiles, shortenedOpennedFiles, shortenedDirectoriesToCreate, shortenedDirectoriesToCreateForSymlinks;
+  let procfs, reducedOpennedFiles;
+  const relativePaths = [];
+  const symlinks = [];
+  const opennedFiles = [];
+  const opennedRegularFiles = [];
+  const opennedDirectories = [];
   var traceOutput = "";
-  const opennedSymlinks = [];
-  var resolvedOpennedFiles = [];
-  var directoriesToCreate = [];
-  const directoriesToCreateForSymlinks = [];
-  const shortenedCategorizedOpennedFiles = [];
-  const potentialParentSymlinks = [];
-  const parentSymlinks = [];
 
   async.series([
     function(callback) {
@@ -427,12 +424,8 @@ function getOpennedFiles(pid, cb) {
                 return asyncCallback(null);
               }
 
-              resolvedOpennedFiles.push(resolvedFile);
-
-              if (resolvedFileStats.isDirectory()) {
-                directoriesToCreate.push(resolvedFile);
-              } else if (init(resolvedFile, '/')) {
-                directoriesToCreate.push(init(resolvedFile, '/').join('/'));
+              if (resolvedFileStats.isDirectory() || resolvedFileStats.isFile()) {
+                opennedFiles.push(resolvedFile);
               }
 
               asyncCallback(null);
@@ -446,9 +439,6 @@ function getOpennedFiles(pid, cb) {
               message: 'Failed to read files currently openned by the process'
             });
           }
-
-          resolvedOpennedFiles = resolvedOpennedFiles.filter(f => IGNORED_PATHS.filter(ignored => f.indexOf(ignored) === 0).length === 0);
-          directoriesToCreate = directoriesToCreate.filter(f => IGNORED_PATHS.filter(ignored => f.indexOf(ignored) === 0).length === 0);
           callback(null);
         });
       });
@@ -554,131 +544,103 @@ function getOpennedFiles(pid, cb) {
           .filter(path => IGNORED_PATHS.filter(ignored => path.indexOf(ignored) === 0).length === 0)
           .filter(path => '/tmp' !== path); //edge case
 
-      opennedFiles = straceParser(['open(', 'openat(']);
-
-      // strace may not pick up full dir!!!
-      const opennedFilesResolver = opennedFiles.map(f => function(asyncCallback) {
-        fs.lstat(f, (err, stats) => {
-          if (err) {
-            if (err.code === 'ENOENT') {
-
-              return asyncCallback(null); //sometimes a process create then delete a temporary file
+      const opennedFilesResolver =
+        straceParser(['open(', 'openat('])
+          .filter(file => {
+            // strace may not pick up absolute path
+            if (file.length > 0 && file[0] === '/') {
+              return true;
             }
-            return asyncCallback(err);
-          }
-
-          fs.realpath(f, (err, resolvedFile) => {
-            if (err) {
-              if (err.code === 'ENOENT') {
-                return asyncCallback(null); //broken symlink
+            relativePaths.push(file);
+            return false;
+          })
+          .map(f => function(asyncCallback) {
+            fs.lstat(f, (err, stats) => {
+              if (err) {
+                if (err.code === 'ENOENT') {
+                  return asyncCallback(null); //sometimes a process create then delete a temporary file
+                }
+                return asyncCallback(err);
               }
-              return asyncCallback(err);
-            }
 
-            if (f !== resolvedFile) {
-              logger.debug(`Resolved ${f} to ${resolvedFile}`);
-            }
-
-            if (init(f, '/') && init(resolvedFile, '/') && init(f, '/').join('/') !== init(resolvedFile, '/').join('/')) {
-              potentialParentSymlinks.push(init(f, '/').join('/'));
-            }
-
-            resolvedOpennedFiles.push(resolvedFile);
-
-            if (stats.isSymbolicLink()) {
-              if (init(f, '/')) {
-                directoriesToCreateForSymlinks.push(init(f, '/').join('/'));
+              if (stats.isSymbolicLink()) {
+                symlinks.push(f);
               }
-              opennedSymlinks.push({
-                linkPath: f,
-                realPath: resolvedFile
+
+              fs.realpath(f, (err, resolvedFile) => {
+                if (err) {
+                  return asyncCallback(null);
+                }
+
+                if (f !== resolvedFile) {
+                  let temp;
+
+                  if (init(f, '/')) {
+                    temp = init(f, '/').join('/');
+                  }
+
+                  while (temp) {
+                    if (fs.lstatSync(temp).isSymbolicLink()) {
+                      symlinks.push(temp);
+                    }
+
+                    temp = init(temp, '/');
+                    if (temp) {
+                      temp = temp.join('/');
+                    }
+                  }
+                }
+
+                opennedFiles.push(resolvedFile);
+                asyncCallback(null);
               });
-            }
-
-            fs.lstat(resolvedFile, (_, resolvedFileStats) => {
-              if (resolvedFileStats.isDirectory()) {
-                directoriesToCreate.push(resolvedFile);
-              } else if (init(resolvedFile, '/')) {
-                directoriesToCreate.push(init(resolvedFile, '/').join('/'));
-              }
-
-              asyncCallback(null);
             });
           });
-        });
-      });
 
-      const processedFilesResolver = straceParser(['open(', 'openat('], false).map(f => function(asyncCallback) {
-        var tempF = f;
-        while (init(tempF, '/') && init(tempF, '/').join('/') && init(tempF, '/').join('/') !== tempF) {
-          tempF = init(tempF, '/').join('/');
-          if (fs.existsSync(tempF)) {
-            directoriesToCreate.push(tempF);
-            break;
-          }
-        }
-        asyncCallback(null);
-      });
-
-      async.parallel(opennedFilesResolver.concat(processedFilesResolver), err => {
+      async.parallel(opennedFilesResolver, err => {
         if (err) {
           const errMsg = 'Failed to collect files that process openned';
           err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
           return callback(err);
         }
 
-        //keep most specific paths only
-        const mkdirMinimal = a => {
-          const array = _.uniq(_.sortBy(a, x => x.length));
-          const minimal = [];
-
-          while (array.length > 0) {
-            var f = array.shift();
-            var add = true;
-
-            for (var i = 0; i < array.length; i++) {
-              if (array[i].indexOf(f) === 0) {
-                add = false;
-                break;
-              }
-            }
-
-            if (add) {
-              minimal.push(f);
-            }
-          }
-
-          return minimal;
-        };
-
-        shortenedDirectoriesToCreate = mkdirMinimal(directoriesToCreate);
-        shortenedDirectoriesToCreateForSymlinks = mkdirMinimal(directoriesToCreateForSymlinks);
-
         callback(null);
       });
     },
     function(callback) {
-      const potentialParentSymlinksResolver = potentialParentSymlinks.map(l => asyncCallback => {
-        //keep calling init till null
-        var tempL = l;
-        while (tempL) {
-          if (fs.lstatSync(tempL).isSymbolicLink()) {
-            parentSymlinks.push({
-              linkPath: tempL,
-              realPath: fs.realpathSync(tempL)
+      var shortenedPaths = shortenPaths(opennedFiles);
+      var tempShortenedPaths = shortenPaths(shortenedPaths);
+
+      while (tempShortenedPaths.length < shortenedPaths.length) {
+        shortenedPaths = tempShortenedPaths;
+        tempShortenedPaths = shortenPaths(tempShortenedPaths);
+      }
+
+      reducedOpennedFiles = shortenedPaths;
+      callback(null);
+    },
+    function(callback) {
+      const realpathResolver = reducedOpennedFiles.map(f => asyncCallback => {
+        fs.lstat(f, (err, stats) => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          if (stats.isDirectory()) {
+            opennedDirectories.push(f);
+          } else if (stats.isFile()) {
+            opennedRegularFiles.push(f);
+          } else {
+            return asyncCallback({
+              message: 'Path is neither a file nor a directory'
             });
           }
 
-          tempL = init(tempL, '/');
-          if (tempL) {
-            tempL = tempL.join('/');
-          }
-        }
-
-        asyncCallback(null);
+          asyncCallback(null);
+        });
       });
 
-      async.series(potentialParentSymlinksResolver, err => {
+      async.series(realpathResolver, err => {
         if (err) {
           return callback({
             message: 'Failed to collect parent symlinks'
@@ -689,47 +651,11 @@ function getOpennedFiles(pid, cb) {
       });
     },
     function(callback) {
-      var shortenedPaths = shortenPaths(resolvedOpennedFiles);
-      var tempShortenedPaths = shortenPaths(shortenedPaths);
-
-      while (tempShortenedPaths.length < shortenedPaths.length) {
-        shortenedPaths = tempShortenedPaths;
-        tempShortenedPaths = shortenPaths(tempShortenedPaths);
-      }
-
-      shortenedOpennedFiles = shortenedPaths;
-      callback(null);
-    },
-    function(callback) {
-      const shortenedOpennedFilesCategorizer = _.uniq(shortenedOpennedFiles).map(f => asyncCallback => {
-        fs.lstat(f, (err, stats) => {
-          if (err) {
-            return asyncCallback(err);
-          }
-          shortenedCategorizedOpennedFiles.push({file: f, isDirectory: stats.isDirectory()});
-          asyncCallback(null);
-        });
-      });
-
-      async.parallel(shortenedOpennedFilesCategorizer, err => {
-        if (err) {
-          return callback({
-            message: 'Failed to categorize opennedFiles'
-          });
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      logger.debug(`Raw openned files: ${opennedFiles.join('\n')}`);
-      logger.debug(`Symlinks to create: ${opennedSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`directories to create: ${directoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`directories to create for symlinks: ${directoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`shortened directories to create: ${shortenedDirectoriesToCreate.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`shortened directories to create for symlinks: ${shortenedDirectoriesToCreateForSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`shortenedPaths: ${shortenedCategorizedOpennedFiles.map(i => JSON.stringify(i)).join('\n')}`);
-      logger.debug(`parentSymlinks: ${parentSymlinks.map(i => JSON.stringify(i)).join('\n')}`);
+      logger.debug(`Warning: relative paths: ${relativePaths.join('\n')}`);
+      logger.debug(`Detected openned files: ${opennedFiles.join('\n')}`);
+      logger.debug(`Detected symlinks: ${symlinks.join('\n')}`);
+      logger.debug(`Detected openned regular files: ${opennedRegularFiles.join('\n')}`);
+      logger.debug(`Detected openned directories: ${opennedDirectories.join('\n')}`);
 
       callback(null);
     }
@@ -739,11 +665,9 @@ function getOpennedFiles(pid, cb) {
       return cb(err);
     }
     cb(null, {
-      opennedFiles: shortenedCategorizedOpennedFiles,
-      symlinks: opennedSymlinks,
-      directories: _.uniq(shortenedDirectoriesToCreate),
-      symlinkDirectories: _.uniq(shortenedDirectoriesToCreateForSymlinks),
-      parentSymlinks: _.uniqBy(parentSymlinks, ps => ps.linkPath)
+      symlinks: _.uniq(symlinks),
+      opennedRegularFiles: _.uniq(opennedRegularFiles),
+      opennedDirectories: _.uniq(opennedDirectories),
     });
   });
 }
@@ -814,11 +738,9 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     , workingDirectoryPath
     , aptPath
     , extraFilesPath
-    , directoriesToCreate
-    , directoriesToCreateForSymlinks
-    , extraFiles
-    , symlinksToCreate
-    , parentSymlinks
+    , symlinks
+    , opennedRegularFiles
+    , opennedDirectories
     , debFiles;
 
   async.series(injectSetkeyv(keyv, progressKey,[
@@ -932,7 +854,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       getOpennedFiles(pid, (err, opennedFiles) => {
-        if (err || !opennedFiles || !opennedFiles.opennedFiles) {
+        if (err || !opennedFiles || !opennedFiles.symlinks || !opennedFiles.opennedRegularFiles || !opennedFiles.opennedDirectories) {
           const errMsg = 'Failed to collect files that process openned';
           if (err) {
             err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
@@ -943,17 +865,15 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           });
         }
 
-        extraFiles = opennedFiles.opennedFiles;
-        symlinksToCreate = opennedFiles.symlinks;
-        directoriesToCreate = opennedFiles.directories;
-        directoriesToCreateForSymlinks = opennedFiles.symlinkDirectories;
-        parentSymlinks = opennedFiles.parentSymlinks;
+        symlinks = opennedFiles.symlinks;
+        opennedRegularFiles = opennedFiles.opennedRegularFiles;
+        opennedDirectories = opennedFiles. opennedDirectories;
         callback(null);
       });
     },
     function(callback) {
       if (metadata.packagesSequence.length === 0) {
-        extraFiles.push({file: metadata.exe, isDirectory: false});
+        opennedRegularFiles.push(metadata.exe);
       }
 
       async.parallel(
@@ -961,10 +881,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           asyncCallback => {
             fs.lstat(a, (err, stats) => {
               if (!err) {
-                extraFiles.push({
-                  file: a,
-                  isDirectory: stats.isDirectory()
-                });
+                if (stats.isDirectory()) {
+                  opennedDirectories.push(a);
+                } else if (stats.isFile()) {
+                  opennedRegularFiles.push(a);
+                }
               }
               asyncCallback(null);
             });
@@ -976,44 +897,37 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       );
     },
     function(callback) {
-      if (directoriesToCreate.length === 0) {
-        return callback(null);
-      }
-
-      mkdir(directoriesToCreate.map(d => `${extraFilesPath}${d}`), err => {
-        if (err) {
-          return callback(err);
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      const copyExtraFiles = extraFiles.map(({file, isDirectory}) => function(asyncCallback) {
-        if (isDirectory) {
-          return shell(`rsync -avW --update ${file}/ ${extraFilesPath}${file}`, CHECK_STDERR_FOR_ERROR, err => {
-            if (err) {
-              return asyncCallback(err);
-            }
-
-            asyncCallback(null);
-          });
-        }
-
-        if (!init(file, '/')) {
-          return asyncCallback(null);
-        }
-
-        shell(`mkdir -p ${extraFilesPath}${init(file, '/').join('/')} && cp ${file} ${extraFilesPath}${init(file, '/').join('/')}/.`, CHECK_STDERR_FOR_ERROR, err => {
+      const syncOpennedDirectories = opennedDirectories.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path}/ ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
           if (err) {
             return asyncCallback(err);
           }
 
           asyncCallback(null);
-        });
-      });
+        })
+      );
 
-      async.series(copyExtraFiles, err => {
+      const syncSymlinks = symlinks.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path} ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          asyncCallback(null);
+        })
+      );
+
+      const syncOpennedRegularFile = opennedRegularFiles.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path} ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          asyncCallback(null);
+        })
+      );
+
+      async.series(syncOpennedDirectories.concat(syncOpennedRegularFile).concat(syncSymlinks), err => {
         if (err) {
           return callback({
             message: 'Failed to import files that process openned'
@@ -1025,7 +939,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       const multipleCommandsDelimiter = `; \\\n  `;
-      const multipleArgsDelimiter = ` \\\n  `;
 
       const dockerfileContent = [
         `FROM ${config.baseimage}`,
@@ -1040,23 +953,10 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
         // test force yes
         metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes rsync ${metadata.packagesSequence.join(' ')}`,
-        directoriesToCreate.length > 0 ? `RUN mkdir -p ${directoriesToCreate.join(multipleArgsDelimiter)}` : '',
         `COPY extraFiles /extraFiles`,
-        extraFiles.length > 0 ? `RUN ${extraFiles.map(({file, isDirectory}) => (isDirectory ? `rsync -avW --update /extraFiles${file}/ ${file}` : `cp /extraFiles${file} ${init(file, '/').join('/')}/.`)).join(multipleCommandsDelimiter)}` : '',
-        directoriesToCreateForSymlinks.length > 0 ? `RUN cd ${metadata.cwd} && mkdir -p ${directoriesToCreateForSymlinks.join(multipleArgsDelimiter)}` : '',
-        symlinksToCreate.length > 0 ? `RUN ${symlinksToCreate.map(({linkPath, realPath}) => `ln -s ${realPath} ${linkPath} || echo ignoring symlink ${linkPath}`).join(multipleCommandsDelimiter)}` : '',
-        parentSymlinks.length > 0 ?
-          `RUN ${
-            parentSymlinks.map(({linkPath, realPath}) => {
-              const tempDirId = shortid.generate();
-              return [`mkdir /tmp/${tempDirId}`,
-                `cp -rf ${linkPath}/. /tmp/${tempDirId}/.`,
-                `rm -rf ${linkPath}`,
-                `ln -s ${realPath} ${linkPath}`,
-                `cp -rf /tmp/${tempDirId}/. ${realPath}/.`,
-                `rm -rf /tmp/${tempDirId}`,].join(' && ');
-            }).join(multipleCommandsDelimiter)
-          }` : '',
+        opennedDirectories.length > 0 ? `RUN ${opennedDirectories.map(path => `rsync -avRW /extraFiles/.${path}/ / `).join(multipleCommandsDelimiter)}` : '',
+        opennedRegularFiles.length > 0 ? `RUN ${opennedRegularFiles.map(path => `rsync -avRW /extraFiles/.${path} / `).join(multipleCommandsDelimiter)}` : '',
+        symlinks.length > 0 ? `RUN ${symlinks.map(path => `rsync -avRW /extraFiles/.${path} / || echo Failed to import symlink`).join(multipleCommandsDelimiter)}` : '',
 
         //Clean up and reduce image size
         `RUN rm -rf /var/lib/apt/lists/*; \\`,
