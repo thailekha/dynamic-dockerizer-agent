@@ -525,7 +525,7 @@ function getOpennedFiles(pid, cb) {
             });
           });
         }, 1000);
-      }, 1000 * 60 * 1);
+      }, 1000 * 60 * config.straceTimeoutInMinutes);
     },
     function(callback) {
       logger.info('Restarting the process');
