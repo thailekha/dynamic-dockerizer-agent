@@ -758,7 +758,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         port = processes[0].port;
         program = processes[0].program;
-        buildPath = `${APP_SPACE}/${program}`;
+        buildPath = `${APP_SPACE}/${program}${port}`;
         packagePath = `${buildPath}/packages`;
         workingDirectoryPath = `${buildPath}/workingDirectory`;
         aptPath = `${buildPath}/apt`;
@@ -985,7 +985,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       // issue: nginx: , causing docker tagging to fail
-      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')} .`, CHECK_STDERR_FOR_ERROR, err => {
+      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')}${port} .`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
             message: 'Failed to build Docker image'
