@@ -994,6 +994,17 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
+    },
+    function(callback) {
+      shell(`rm -rf ${buildPath}`, CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to delete build path'
+          });
+        }
+
+        callback(null);
+      });
     }
   ]),
   function(err) {
