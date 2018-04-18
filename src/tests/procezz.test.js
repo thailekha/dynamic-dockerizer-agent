@@ -10,21 +10,37 @@ const expect = chai.expect;
 const secret = 'secret';
 const token = jwt.sign({}, secret);
 
-function startNginx(done) {
-  shell(`service nginx restart`, true, err => {
-    expect(err).to.be.null;
-
-    const intervalObject = setInterval(function() {
-      if (app.ddAgentReady) {
-        clearInterval(intervalObject);
-        done();
+function startService(service) {
+  return function(asyncCallback) {
+    shell(`service ${service} restart`, true, err => {
+      if (err) {
+        return asyncCallback(err);
       }
-    }, 1000);
-  });
+      asyncCallback(null);
+    });
+  };
 }
 
-describe('listprocess', function() {
-  before(startNginx);
+function waitForServer(asyncCallback) {
+  const intervalObject = setInterval(function() {
+    if (app.ddAgentReady) {
+      clearInterval(intervalObject);
+      asyncCallback(null);
+    }
+  }, 1000);
+}
+
+function constructBefore(asyncFunctions) {
+  return function(done) {
+    async.series(asyncFunctions, err => {
+      expect(err).to.be.null;
+      done();
+    });
+  };
+}
+
+describe('listnginx', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
 
   it('should list TCP processes including nginx', done => {
     request(app)
@@ -41,10 +57,10 @@ describe('listprocess', function() {
   });
 });
 
-describe('inspectprocess', function() {
+describe('inspectnginx', function() {
   let pid;
 
-  before(startNginx);
+  before(constructBefore([startService('nginx'),waitForServer]));
 
   it('should inspect nginx process', done => {
     async.series([
@@ -89,10 +105,10 @@ describe('inspectprocess', function() {
   });
 });
 
-describe('convertprocess', function() {
+describe('convertnginx', function() {
   let pid;
 
-  before(startNginx);
+  before(constructBefore([startService('nginx'),waitForServer]));
 
   it('should convert nginx to Docker image', done => {
     async.series([
@@ -130,15 +146,49 @@ describe('convertprocess', function() {
   });
 });
 
-describe('inspectunexistedprocess', function() {
-  before(done => {
-    const intervalObject = setInterval(function() {
-      if (app.ddAgentReady) {
-        clearInterval(intervalObject);
-        done();
+describe('convertmongod', function() {
+  let pid;
+
+  before(constructBefore([startService('mongod'),waitForServer]));
+
+  it('should convert mongod to Docker image', done => {
+    async.series([
+      function(callback) {
+        request(app)
+          .get('/process')
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200)
+          .expect('Content-Type', /json/)
+          .end(function(err, res) {
+            expect(err).to.be.null;
+            const filterredPrograms = res.body.processes.filter(({program}) => program === 'mongod');
+            assert.equal(1, filterredPrograms.length);
+            pid = filterredPrograms[0].pid;
+            expect(pid).to.not.be.undefined;
+            callback(null);
+          });
+      },
+      function(callback) {
+        request(app)
+          .get(`/process/${pid}/convert`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200)
+          .expect('Content-Type', /json/)
+          .end(function(err) {
+            expect(err).to.be.null;
+            callback(null);
+          });
       }
-    }, 1000);
+    ],
+    function(err) {
+      expect(err).to.not.be.undefined;
+      done();
+    });
   });
+});
+
+describe('inspectunexistedprocess', function() {
+  before(constructBefore([waitForServer]));
 
   it('should not inspect a process that does not exist', done => {
     request(app)

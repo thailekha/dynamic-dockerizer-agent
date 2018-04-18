@@ -19,7 +19,7 @@ function waitServerReady(done) {
 describe('checkhost', function() {
   before(waitServerReady);
 
-  it('should list TCP processes including nginx', done => {
+  it('should check for host OS and required packages', done => {
     request(app)
       .get('/checkhost')
       .set('Authorization', `Bearer ${token}`)
