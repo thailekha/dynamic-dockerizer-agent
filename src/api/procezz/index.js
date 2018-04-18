@@ -3,7 +3,7 @@ import async from 'async';
 import {DepGraph} from 'dependency-graph';
 import fs from 'fs';
 import { exec } from 'shelljs';
-import {logger, hasAll, hasEither, last, head, tail, init, remove, splitTrimFilter, shell, mkdir, injectSetkeyv} from '../../lib/util';
+import {logger, hasAll, hasEither, last, head, tail, init, remove, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
 import _ from 'lodash';
 
@@ -734,14 +734,12 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     , program
     , metadata
     , buildPath
-    , packagePath
     , workingDirectoryPath
     , aptPath
     , extraFilesPath
     , symlinks
     , opennedRegularFiles
-    , opennedDirectories
-    , debFiles;
+    , opennedDirectories;
 
   async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
@@ -759,7 +757,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         port = processes[0].port;
         program = processes[0].program;
         buildPath = `${APP_SPACE}/${program}${port}`;
-        packagePath = `${buildPath}/packages`;
         workingDirectoryPath = `${buildPath}/workingDirectory`;
         aptPath = `${buildPath}/apt`;
         extraFilesPath = `${buildPath}/extraFiles`;
@@ -767,7 +764,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      mkdir([buildPath, packagePath, workingDirectoryPath, aptPath, extraFilesPath], err => {
+      mkdir([buildPath, workingDirectoryPath, aptPath, extraFilesPath], err => {
         if (err) {
           return callback({
             message: 'Failed to update folder for building Docker image for the process'
@@ -796,32 +793,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           });
         }
 
-        callback(null);
-      });
-    },
-    function(callback) {
-      shell(`cd ${packagePath} && dpkg-repack strace`, !CHECK_STDERR_FOR_ERROR, err => {
-        if (err) {
-          return callback({
-            message: 'Failed to repack apt and strace'
-          });
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      shell(`cd ${packagePath} && ls | grep .deb`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
-        if (err) {
-          if (err.code && err.code === 1) {
-            return callback(null);
-          }
-          return callback({
-            message: 'Failed to gather repacked dependencies .deb files'
-          });
-        }
-
-        debFiles = splitTrimFilter(stdout);
         callback(null);
       });
     },
@@ -942,17 +913,14 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
       const dockerfileContent = [
         `FROM ${config.baseimage}`,
-        `COPY packages /packages`,
         `COPY apt /apt`,
         // `Run dpkg --purge apt`,
         `RUN rm -rf /var/lib/apt/* || echo Failed to overwrite apt settings; \\`,
         `  rm -rf /etc/apt/* || echo Failed to overwrite apt settings; \\`,
         `  cp -rf /apt/varlib/. /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
         `  cp -rf /apt/etc/. /etc/apt/. || echo Failed to overwrite apt settings;`,
-        debFiles.map(deb => `RUN dpkg -i --force-breaks /packages/${deb}`).join('\n'),
         `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
-        // test force yes
-        metadata.packagesSequence.length === 0 ? 'RUN apt-get install --no-install-recommends -f -y --force-yes rsync' : `RUN apt-get install --no-install-recommends -f -y --force-yes rsync ${metadata.packagesSequence.join(' ')}`,
+        `RUN apt-get install --no-install-recommends --no-install-suggests -f -y --force-yes rsync strace ${metadata.packagesSequence.join(' ')}`,
         `COPY extraFiles /extraFiles`,
         opennedDirectories.length > 0 ? `RUN ${opennedDirectories.map(path => `rsync -avRW /extraFiles/.${path}/ / `).join(multipleCommandsDelimiter)}` : '',
         opennedRegularFiles.length > 0 ? `RUN ${opennedRegularFiles.map(path => `rsync -avRW /extraFiles/.${path} / `).join(multipleCommandsDelimiter)}` : '',
@@ -961,7 +929,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         //Clean up and reduce image size
         `RUN rm -rf /var/lib/apt/lists/*; \\`,
         `  rm -rf /var/cache/apt/*; \\`,
-        `  rm -rf /packages; \\`,
         `  rm -rf /apt; \\`,
         `  rm -rf /extraFiles;`,
         `COPY workingDirectory /workingDirectory`,

@@ -11,7 +11,7 @@ export default function buildAPI(server) {
   const IGNORED_PROGRAMS = ['rpc.statd'];
 
   server.use('/checkhost', checkhostHandler());
-  server.use('/process', procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv));
+  server.use('/processes', procezzHandler({IGNORED_PORTS, IGNORED_PROGRAMS}, keyv));
   server.use('/progress', progress(keyv));
   server.use(errorHandler);
 }

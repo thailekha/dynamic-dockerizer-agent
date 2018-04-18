@@ -6,6 +6,27 @@ import { exec } from 'shelljs';
 export function checkhostHandler() {
   const router = Router({mergeParams:true});
 
+  /**
+    * @swagger
+    * /checkhost:
+    *   get:
+    *     tags:
+    *       - Check host
+    *     summary: 'Check OS of the host and required packages'
+    *     description:
+    *     operationId: checkHost
+    *     produces:
+    *       - application/json
+    *     responses:
+    *       '200':
+    *         description: 'Ok'
+    *         schema:
+    *             type: object
+    *             properties:
+    *                 message:
+    *                     type: string
+    *                     example: "Host OS validated,Ubuntu Linux trusty 14.04, All required packages installed"
+    */
   router.get('/', (req, res, next) => {
     let osMsg, packageMsg;
 
@@ -28,7 +49,7 @@ export function checkhostHandler() {
         });
       },
       function(callback) {
-        exec(`dpkg-query -W dpkg-repack build-essential apt-rdepends docker`, (code, _, stderr) => {
+        exec(`dpkg-query -W rsync build-essential apt-rdepends docker`, (code, _, stderr) => {
           if ( !(code === 0 || code === 1) || stderr ) {
             return callback({
               message: 'Failed to validate required packages'
@@ -39,7 +60,7 @@ export function checkhostHandler() {
             packageMsg = 'All required packages installed';
           } else {
             //code === 1
-            packageMsg = `Not all required packages installed, please reprovision or manually make sure the following packages are installed: dpkg-repack build-essential apt-rdepends`;
+            packageMsg = `Not all required packages installed, please reprovision or manually make sure the following packages are installed: rsync build-essential apt-rdepends`;
           }
 
           callback(null);

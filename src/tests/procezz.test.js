@@ -44,7 +44,7 @@ describe('listnginx', function() {
 
   it('should list TCP processes including nginx', done => {
     request(app)
-      .get('/process')
+      .get('/processes')
       .set('Authorization', `Bearer ${token}`)
       .expect(200)
       .expect('Content-Type', /json/)
@@ -66,7 +66,7 @@ describe('inspectnginx', function() {
     async.series([
       function(callback) {
         request(app)
-          .get('/process')
+          .get('/processes')
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -81,7 +81,7 @@ describe('inspectnginx', function() {
       },
       function(callback) {
         request(app)
-          .get(`/process/${pid}`)
+          .get(`/processes/${pid}`)
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -114,7 +114,7 @@ describe('convertnginx', function() {
     async.series([
       function(callback) {
         request(app)
-          .get('/process')
+          .get('/processes')
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -129,7 +129,7 @@ describe('convertnginx', function() {
       },
       function(callback) {
         request(app)
-          .get(`/process/${pid}/convert`)
+          .get(`/processes/${pid}/convert`)
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -155,7 +155,7 @@ describe('convertmongod', function() {
     async.series([
       function(callback) {
         request(app)
-          .get('/process')
+          .get('/processes')
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -170,7 +170,7 @@ describe('convertmongod', function() {
       },
       function(callback) {
         request(app)
-          .get(`/process/${pid}/convert`)
+          .get(`/processes/${pid}/convert`)
           .set('Authorization', `Bearer ${token}`)
           .expect(200)
           .expect('Content-Type', /json/)
@@ -192,7 +192,7 @@ describe('inspectunexistedprocess', function() {
 
   it('should not inspect a process that does not exist', done => {
     request(app)
-      .get(`/process/-1`)
+      .get(`/processes/-1`)
       .set('Authorization', `Bearer ${token}`)
       .expect(404)
       .expect('Content-Type', /json/)
