@@ -7,10 +7,11 @@ Vagrant.configure("2") do |config|
     config.vbguest.auto_update = false
 
     config.vm.synced_folder ".", "/mnt/vagrant"
+    config.vm.synced_folder "/home/tle/playground/gantry-thai", "/mnt/gantry"
 
     config.vm.provider "virtualbox" do |v|
       v.customize ["modifyvm", :id, "--cpuexecutioncap", "100"]
-      v.customize ["modifyvm", :id, "--memory", "512"]
+      v.customize ["modifyvm", :id, "--memory", "1024"]
     end    
   end
 

@@ -5,28 +5,6 @@ const VERBOSE = 2;
 const DEBUG = VERBOSE >= 2;
 const INFO = VERBOSE >= 1;
 
-/**	Creates a callback that proxies node callback style arguments to an Express Response object.
- *	@param {express.Response} res	Express HTTP Response
- *	@param {number} [status=200]	Status code to send on success
- *
- *	@example
- *		list(req, res) {
- *			collection.find({}, toRes(res));
- *		}
- */
-export function toRes(res, status=200) {
-  return (err, thing) => {
-    if (err) {
-      return res.status(500).send(err);
-    }
-
-    if (thing && typeof thing.toObject==='function') {
-      thing = thing.toObject();
-    }
-    res.status(status).json(thing);
-  };
-}
-
 export const logger = {
   overview: function(msg, extraCondition = true) {
     if (extraCondition) {
@@ -69,6 +47,14 @@ export function tail(string, delimitier) {
   return parts;
 }
 
+export function init(string, delimitier) {
+  const parts = string.split(delimitier);
+  if (parts.length <= 1) {
+    return null;
+  }
+  return parts.slice(0, parts.length - 1);
+}
+
 export function remove(str, toRemove) {
   var final = str;
   while (final.indexOf(toRemove) > -1) {
@@ -82,8 +68,8 @@ export function splitTrimFilter(str) {
 }
 
 export function shell(command, checkStderrForError = true, cb) {
+  logger.info(command);
   exec(command, {silent:true}, (code, stdout, stderr) => {
-    logger.info(command);
     logger.debug(`stdout: ${stdout}`);
     logger.debug(`stderr: ${stderr}`);
 
@@ -106,7 +92,7 @@ export function mkdir(paths, cb) {
     });
   });
 
-  async.series(pathsBuilders, function(err) {
+  async.parallel(pathsBuilders, function(err) {
     if (err) {
       return cb(err);
     }
@@ -115,11 +101,26 @@ export function mkdir(paths, cb) {
   });
 }
 
-export function setkeyv(keyv, progressKey, value, cb) {
+function setkeyv(keyv, progressKey, value, cb) {
   if (keyv && progressKey) {
     return keyv
       .set(progressKey, value)
       .then(() => cb(null));
   }
   cb(null);
+}
+
+export function injectSetkeyv(keyv, progressKey, asyncCallbacks) {
+  if (keyv && progressKey) {
+    const injected = [];
+    asyncCallbacks.forEach((ac, index, all) => {
+      const progress = Math.round(index * 100 / all.length);
+      injected.push(function(callback) {
+        setkeyv(keyv, progressKey, progress, callback);
+      });
+      injected.push(ac);
+    });
+    return injected;
+  }
+  return asyncCallbacks;
 }

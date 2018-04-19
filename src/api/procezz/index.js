@@ -1,22 +1,23 @@
 import config from '../../config.json';
 import async from 'async';
 import {DepGraph} from 'dependency-graph';
-import dockerfileGen from 'dockerfile-generator';
 import fs from 'fs';
 import { exec } from 'shelljs';
-import {logger, hasAll, hasEither, last, head, tail, remove, splitTrimFilter, shell, mkdir, setkeyv} from '../../lib/util';
+import {logger, hasAll, hasEither, last, head, tail, init, remove, shell, mkdir, injectSetkeyv} from '../../lib/util';
 import {listImages} from '../../lib/image';
-import Docker from 'dockerode';
+import _ from 'lodash';
 
 const APP_SPACE = config.appSpace;
 const CHECK_STDERR_FOR_ERROR = true; //some commmands output warning message to stderr
+const IGNORED_PATHS = ['/mnt','/sys','/proc','/dev','/run','/tmp/dd-agent'];
+const ACCEPTED_PATHS_FOR_SHORTENING = ['root', 'home', 'opt', 'usr', 'var'];
 
-const docker = new Docker({
-  socketPath: '/var/run/docker.sock'
-});
+function pidCommand(command, escapeDollarSign = true) {
+  return `${escapeDollarSign ? '\\$' : '$'}(pidof ${command} | sed 's/\\([0-9]*\\)/-p \\1/g')`;
+}
 
 export function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
-  exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', (code, stdout, stderr) => {
+  exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', {silent:true}, (code, stdout, stderr) => {
     // if terraform command time out, no response is returned by express, why?
     if (code !== 0 || stderr) {
       return cb({
@@ -75,21 +76,38 @@ export function parseProcfs(pid, cb) {
           });
         }
 
-        exe = stdout;
+        exe = head(stdout,'\n');
         bin = head(last(exe,'/'),'\n'); //strip new line here !!!
         callback(null);
       });
     },
     function(callback) {
-      exec(`which ${bin}`, (code, _, stderr) => {
+      exec(`which ${bin}`, {silent:true}, (code, _, stderr) => {
         if (code !== 0 || stderr) {
           entrypointCmd = head(exe,'\n');
         } else {
           entrypointCmd = bin;
         }
 
-        entrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
-        callback(null);
+        const unresolvedEntrypointArgs = tail(cmdline,'\0').map(a => a.trim()).filter(a => a.length > 0);
+
+        entrypointArgs = [];
+
+        const entrypointArgsFilesResolver = unresolvedEntrypointArgs.map(f => function(asyncCallback) {
+          fs.realpath(f, (err, resolvedFile) => {
+            if (!err) {
+              entrypointArgs.push(resolvedFile);
+            } else {
+              entrypointArgs.push(f);
+            }
+            asyncCallback(null);
+          });
+        });
+
+        //must use series here to preserve args order
+        async.series(entrypointArgsFilesResolver, () => {
+          callback(null);
+        });
       });
     },
     function(callback) {
@@ -136,15 +154,15 @@ export function getPackagesSequence(exe, cb) {
   var buildDeps = [];
   var reverseDeps = [];
   var reverseBuildDeps = [];
-  const packagesSequence = [];
+  var packagesSequence = [];
 
   async.series([
     function(callback) {
       shell(`dpkg -S ${exe}`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
         if (err) {
-          return callback({
-            message: 'Failed to search for packages from the executable file'
-          });
+          logger.debug('Failed to search for packages from the executable file, so will only copy the executable file instead');
+          corePackages = [];
+          return callback(null);
         }
 
         corePackages = Array.from(
@@ -253,32 +271,20 @@ export function getPackagesSequence(exe, cb) {
       callback(null);
     },
     function(callback) {
-      const onlyNotInstalledInBaseImage = dependencyGraph
-        .overallOrder()
-        .map(dep => function(asyncCallback) {
-          exec(`docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "dpkg -L ${dep}"`, (code, stdout, stderr) => {
-            if (code === 1) {
-              packagesSequence.push(dep);
-              return asyncCallback(null);
-            }
-
-            if ( !(code === 0 || code === 1) || stderr ) {
-              return asyncCallback({
-                command: `docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "dpkg -L ${dep}"`,
-                stderr: stderr
-              });
-            }
-
-            asyncCallback(null);
-          });
-        });
-
-      async.series(onlyNotInstalledInBaseImage, function(err) {
-        if (err) {
+      const filterDepsCommand = `docker run -i --rm --entrypoint /bin/bash ${config.baseimage} -c "for PACKAGE in ${dependencyGraph.overallOrder().join(' ')}; do if ! dpkg -L \\$PACKAGE &>/dev/null; then echo \\$PACKAGE; fi; done"`;
+      logger.debug(`Filtering dependencies that are already installed in baseimage with command: ${filterDepsCommand}`);
+      exec(filterDepsCommand, {silent:true}, (code, stdout) => {
+        if (code !== 0) {
           return callback({
             message: 'Failed to filter the package dependency graph'
           });
         }
+
+        stdout
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0)
+          .forEach(dep => packagesSequence.push(dep));
 
         callback(null);
       });
@@ -329,11 +335,55 @@ function prepareWholeVMContainer(cb) {
   });
 }
 
-export function getOpennedFiles(pid, cb) {
-  let procfs;
-  // const stracePath = `${APP_SPACE}/strace`;
-  var opennedFiles = [];
-  var resolvedOpennedFiles = []; //cater for symlinks
+function shortenPaths(paths) {
+  var shortenedPaths = [];
+
+  paths.forEach((thisPath, _, array) => {
+    const thisPathParts = tail(thisPath, '/'); //first is '' so skip it
+
+    if (ACCEPTED_PATHS_FOR_SHORTENING.indexOf(thisPathParts[0]) < 0) {
+      return shortenedPaths.push(thisPath);
+    }
+
+    var diffIndex = null;
+
+    array.forEach(thatPath => {
+      if (thatPath === thisPath) {
+        return;
+      }
+
+      const thatPathParts = tail(thatPath,'/');
+      thisPathParts.forEach((part, index) => {
+        if (thatPathParts.length <= index) {
+          return;
+        }
+
+        if (part === thatPathParts[index] && (diffIndex === null || index > diffIndex)) {
+          diffIndex = index;
+        }
+      });
+    });
+
+    diffIndex += 1;
+
+    if (diffIndex > 3) {
+      shortenedPaths.push(thisPath.split('/').slice(0,diffIndex).join('/'));
+    } else {
+      shortenedPaths.push(thisPath);
+    }
+  });
+
+  return _.uniq(shortenedPaths);
+}
+
+function getOpennedFiles(pid, cb) {
+  let procfs, reducedOpennedFiles;
+  const relativePaths = [];
+  const symlinks = [];
+  const opennedFiles = [];
+  const opennedRegularFiles = [];
+  const opennedDirectories = [];
+  var traceOutput = "";
 
   async.series([
     function(callback) {
@@ -356,108 +406,196 @@ export function getOpennedFiles(pid, cb) {
       });
     },
     function(callback) {
-      const command = [
-        `cd ${procfs.cwd} &&`,
-        `strace -fe open ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')}`,
-        // `&> ${stracePath}/${procfs.bin}.log`].join(' '),
-      ].join(' ');
-
-      const STRACE_CONTAINER = {
-        Image: config.vmimage,
-        AttachStdin: false,
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: true,
-        Cmd: ['/bin/bash', '-c', command],
-        OpenStdin: false,
-        StdinOnce: false
-      };
-
-      docker.createContainer(STRACE_CONTAINER, function(err, container) {
+      fs.readdir(`/proc/${pid}/fd`, function(err, items) {
         if (err) {
-          const errMsg = 'Failed to create strace container';
-          err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-          return callback(err);
+          return callback({
+            message: 'Failed to read files currently openned by the process'
+          });
         }
 
-        container.start((err, data) => {
-          if (err || data === null) {
-            const errMsg = 'Failed to start strace container';
-            err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-            return callback(err);
-          }
-
-          container.attach({
-            stream: true,
-            stdout: true,
-            stderr: true,
-            tty: true
-          }, (err, stream) => {
+        const currentlyOpennedFilesResolver = items.map(i => asyncCallback => {
+          fs.realpath(`/proc/${pid}/fd/${i}`, (err, resolvedFile) => {
             if (err) {
-              const errMsg = 'Failed to attach to strace container';
-              err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
-              return callback(err);
+              return asyncCallback(null);
             }
 
-            stream.on('data', chunk => {
-              opennedFiles = opennedFiles.concat(
-                chunk
-                  .toString()
-                  .split(`\n`)
-                  .map(line => line.split(`"`))
-                  //open_at as well
-                  .filter(lineParts => lineParts.length > 0
-                    && lineParts[0] === 'open('
-                    && lineParts
-                      .filter(p => p.indexOf('= -1') > -1).length === 0)
-                  .map(line => line[1])
-              );
+            fs.lstat(resolvedFile, (err, resolvedFileStats) => {
+              if (err) {
+                return asyncCallback(null);
+              }
+
+              if (resolvedFileStats.isDirectory() || resolvedFileStats.isFile()) {
+                opennedFiles.push(resolvedFile);
+              }
+
+              asyncCallback(null);
             });
-
-            const straceKiller = setInterval(() => {
-              //remove strace container if the strace process in it enters the sleep state
-              shell(`docker exec ${container.id} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
-                if (err && err.code === 1) {
-                  logger.debug('strace interval');
-                  return;
-                }
-
-                clearInterval(straceKiller);
-
-                if (err) {
-                  return callback({
-                    message: 'Failed to stop tracing for openned files'
-                  });
-                }
-
-                shell(`docker rm -f ${container.id}`, CHECK_STDERR_FOR_ERROR, err => {
-                  if (err) {
-                    return callback({
-                      message: 'Failed to stop tracing for openned files'
-                    });
-                  }
-
-                  callback(null);
-                });
-              });
-            }, 5000);
-
           });
+        });
+
+        async.parallel(currentlyOpennedFilesResolver, err => {
+          if (err) {
+            return callback({
+              message: 'Failed to read files currently openned by the process'
+            });
+          }
+          callback(null);
         });
       });
     },
     function(callback) {
-      //resolve to directory if not ~ or /
-      const opennedFilesResolver = opennedFiles.map(f => function(asyncCallback) {
-        fs.realpath(f, (err, resolvedFile) => {
-          if (err) {
-            return asyncCallback(err);
+      shell(`kill ${pid}`, CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to kill the process'
+          });
+        }
+        callback(null);
+      });
+    },
+    function(callback) {
+      //container created by dockerode  cannot be connected to host network
+      //would give `server error - container cannot be disconnected from host network or connected to host network`
+      const straceCommand = [
+        `cd ${procfs.cwd} &&`,
+        `strace -fe trace=file ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &&`,
+        `echo strace attach ${pidCommand(procfs.entrypointCmd)} &&`,
+        `strace -fe trace=file ${pidCommand(procfs.entrypointCmd)}`
+      ].join(' ');
+
+      const straceContainerCommand = `docker run --name strace-${pid} --network=host -i --rm --privileged --entrypoint /bin/bash ${config.vmimage} -c "${straceCommand}"`;
+
+      logger.info(`Starting container to trace openned files with command, to test it: ${straceContainerCommand}`);
+
+      exec(straceContainerCommand, {silent:true, async:true}).stderr.on('data', data => {
+        traceOutput += data;
+      });
+
+      callback(null);
+    },
+    function(callback) {
+      setTimeout(() => {
+        logger.info(`Preparing to kill strace container`);
+        var lock = false;
+        const straceKiller = setInterval(() => {
+
+          if (lock) {
+            logger.debug('Strace killer is blocked');
+            return;
           }
 
-          resolvedOpennedFiles.push(resolvedFile);
-          asyncCallback(null);
-        });
-      });
+          lock = true;
+
+          const removeContainer = cb => {
+            shell(`docker rm -f strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
+              if (err) {
+                return cb({
+                  message: 'Failed to stop tracing for openned files'
+                });
+              }
+
+              cb(null);
+            });
+          };
+
+          shell(`docker ps | grep strace-${pid}`, CHECK_STDERR_FOR_ERROR, err => {
+            if (err && err.code === 1) {
+              // container not running
+              clearInterval(straceKiller);
+              return removeContainer(callback);
+            }
+
+            //remove strace container if the strace process in it enters the sleep state
+            shell(`docker exec strace-${pid} /bin/bash -c "ps -C strace -o state= | grep S"`, CHECK_STDERR_FOR_ERROR, err => {
+              if (err && err.code === 1) {
+                logger.debug('strace interval');
+                lock = false;
+                return;
+              }
+
+              clearInterval(straceKiller);
+
+              if (err) {
+                return callback({
+                  message: 'Failed to stop tracing for openned files'
+                });
+              }
+
+              removeContainer(callback);
+            });
+          });
+        }, 1000);
+      }, 1000 * 60 * config.straceTimeoutInMinutes);
+    },
+    function(callback) {
+      logger.info('Restarting the process');
+      exec(`cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`, {silent:true, async:true});
+      callback(null);
+    },
+    function(callback) {
+      const straceParser = (syscalls, match = true) =>
+        traceOutput
+          .split(`\n`)
+          .filter(line => line.indexOf('("') > -1 && line.indexOf('= -1') < 0)
+          .map(line => line.split(`"`))
+          .filter(lineParts => lineParts.length > 1 && (match ? syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length > 0 : syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length === 0))
+        // .filter(lineParts => lineParts.length > 1)
+          .map(line => line[1])
+          .filter(path => IGNORED_PATHS.filter(ignored => path.indexOf(ignored) === 0).length === 0)
+          .filter(path => '/tmp' !== path); //edge case
+
+      const opennedFilesResolver =
+        straceParser(['open(', 'openat('])
+          .filter(file => {
+            // strace may not pick up absolute path
+            if (file.length > 0 && file[0] === '/') {
+              return true;
+            }
+            relativePaths.push(file);
+            return false;
+          })
+          .map(f => function(asyncCallback) {
+            fs.lstat(f, (err, stats) => {
+              if (err) {
+                if (err.code === 'ENOENT') {
+                  return asyncCallback(null); //sometimes a process create then delete a temporary file
+                }
+                return asyncCallback(err);
+              }
+
+              if (stats.isSymbolicLink()) {
+                symlinks.push(f);
+              }
+
+              fs.realpath(f, (err, resolvedFile) => {
+                if (err) {
+                  return asyncCallback(null);
+                }
+
+                if (f !== resolvedFile) {
+                  let temp;
+
+                  if (init(f, '/')) {
+                    temp = init(f, '/').join('/');
+                  }
+
+                  while (temp) {
+                    if (fs.lstatSync(temp).isSymbolicLink()) {
+                      symlinks.push(temp);
+                    }
+
+                    temp = init(temp, '/');
+                    if (temp) {
+                      temp = temp.join('/');
+                    }
+                  }
+                }
+
+                opennedFiles.push(resolvedFile);
+                asyncCallback(null);
+              });
+            });
+          });
 
       async.parallel(opennedFilesResolver, err => {
         if (err) {
@@ -468,17 +606,97 @@ export function getOpennedFiles(pid, cb) {
 
         callback(null);
       });
+    },
+    function(callback) {
+      var shortenedPaths = shortenPaths(opennedFiles);
+      var tempShortenedPaths = shortenPaths(shortenedPaths);
+
+      while (tempShortenedPaths.length < shortenedPaths.length) {
+        shortenedPaths = tempShortenedPaths;
+        tempShortenedPaths = shortenPaths(tempShortenedPaths);
+      }
+
+      reducedOpennedFiles = shortenedPaths;
+      callback(null);
+    },
+    function(callback) {
+      const realpathResolver = reducedOpennedFiles.map(f => asyncCallback => {
+        fs.lstat(f, (err, stats) => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          if (stats.isDirectory()) {
+            opennedDirectories.push(f);
+          } else if (stats.isFile()) {
+            opennedRegularFiles.push(f);
+          } else {
+            return asyncCallback({
+              message: 'Path is neither a file nor a directory'
+            });
+          }
+
+          asyncCallback(null);
+        });
+      });
+
+      async.series(realpathResolver, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to collect parent symlinks'
+          });
+        }
+
+        callback(null);
+      });
+    },
+    function(callback) {
+      logger.debug(`Warning: relative paths: ${relativePaths.join('\n')}`);
+      logger.debug(`Detected openned files: ${opennedFiles.join('\n')}`);
+      logger.debug(`Detected symlinks: ${symlinks.join('\n')}`);
+      logger.debug(`Detected openned regular files: ${opennedRegularFiles.join('\n')}`);
+      logger.debug(`Detected openned directories: ${opennedDirectories.join('\n')}`);
+
+      callback(null);
     }
   ],
   function(err) {
     if (err) {
       return cb(err);
     }
-    cb(null, {opennedFiles: resolvedOpennedFiles});
+    cb(null, {
+      symlinks: _.uniq(symlinks),
+      opennedRegularFiles: _.uniq(opennedRegularFiles),
+      opennedDirectories: _.uniq(opennedDirectories),
+    });
   });
 }
 
-export function getProcessMetadata(keyv, progressKey, pid, cb) {
+export function inspectProcess(keyv, progressKey, pid, cb) {
+  let metadata;
+
+  async.series(injectSetkeyv(keyv, progressKey,[
+    function(callback) {
+      getProcessMetadata(pid, (err, meta) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata = meta;
+        callback(null);
+      });
+    }
+  ]),
+  function(err) {
+    if (err) {
+      return cb(err);
+    }
+
+    cb(null, metadata);
+  });
+}
+
+function getProcessMetadata(pid, cb) {
   let metadata;
 
   async.series([
@@ -491,9 +709,6 @@ export function getProcessMetadata(keyv, progressKey, pid, cb) {
         metadata = meta;
         callback(null);
       });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 30, callback);
     },
     function(callback) {
       getPackagesSequence(metadata.exe, (err, packagesSequence) => {
@@ -515,9 +730,18 @@ export function getProcessMetadata(keyv, progressKey, pid, cb) {
 }
 
 export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid, cb) {
-  let port, program, metadata, buildPath, packagePath, workingDirectoryPath, extraFilesPath, extraFiles, debFiles, dockerfile;
+  let port
+    , program
+    , metadata
+    , buildPath
+    , workingDirectoryPath
+    , aptPath
+    , extraFilesPath
+    , symlinks
+    , opennedRegularFiles
+    , opennedDirectories;
 
-  async.series([
+  async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
       parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, pid, (err, {processes}) => {
         if (err) {
@@ -532,31 +756,15 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         port = processes[0].port;
         program = processes[0].program;
-        buildPath = `${APP_SPACE}/${program}`;
-        packagePath = `${buildPath}/packages`;
+        buildPath = `${APP_SPACE}/${program}${port}`;
         workingDirectoryPath = `${buildPath}/workingDirectory`;
+        aptPath = `${buildPath}/apt`;
         extraFilesPath = `${buildPath}/extraFiles`;
         callback(null);
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 10, callback);
-    },
-    function(callback) {
-      getProcessMetadata(null, null, pid, (err, meta) => {
-        if (err) {
-          return callback(err);
-        }
-
-        metadata = meta;
-        callback(null);
-      });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 20, callback);
-    },
-    function(callback) {
-      mkdir([buildPath, packagePath, workingDirectoryPath, extraFilesPath], err => {
+      mkdir([buildPath, workingDirectoryPath, aptPath, extraFilesPath], err => {
         if (err) {
           return callback({
             message: 'Failed to update folder for building Docker image for the process'
@@ -567,12 +775,45 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 30, callback);
+      shell(`cp -rf /var/lib/apt ${aptPath}/varlib`, !CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to preserve apt'
+          });
+        }
+
+        callback(null);
+      });
     },
     function(callback) {
-      const runScriptContent = `#!/bin/bash\\n${metadata.entrypointCmd} ${metadata.entrypointArgs.join(' ')} && while ps -C ${metadata.entrypointCmd}; do echo -n stopping process from going background ... && sleep 3; done`;
+      shell(`cp -rf /etc/apt ${aptPath}/etc`, !CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to preserve apt'
+          });
+        }
 
-      shell(`echo '${runScriptContent}' > ${workingDirectoryPath}/cmdScript.sh`, CHECK_STDERR_FOR_ERROR, err => {
+        callback(null);
+      });
+    },
+    function(callback) {
+      getProcessMetadata(pid, (err, meta) => {
+        if (err) {
+          return callback(err);
+        }
+
+        metadata = meta;
+        callback(null);
+      });
+    },
+    function(callback) {
+      const mainCommand = `${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd}`;
+      const straceCommand = `strace -o /dev/null -fe trace=process ${mainCommand} ${metadata.entrypointArgs.join(' ')} && echo strace attach ${pidCommand(mainCommand, false)} && strace -o /dev/null -fe trace=process ${pidCommand(mainCommand, false)}`;
+      const runScriptContent = `#!/bin/bash\n${straceCommand}`;
+
+      logger.debug(`Runscript: ${runScriptContent}`);
+
+      fs.writeFile(`${workingDirectoryPath}/cmdScript.sh`, runScriptContent, err => {
         if (err) {
           return callback({
             message: 'Failed to generate run script'
@@ -583,37 +824,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 40, callback);
-    },
-    function(callback) {
-      const repackers = metadata
-        .packagesSequence
-        .map(p => function(asyncCallback) {
-          shell(`cd ${packagePath} && dpkg-repack ${p}`, !CHECK_STDERR_FOR_ERROR, err => {
-            if (err) {
-              return asyncCallback(err);
-            }
-
-            asyncCallback(null);
-          });
-        });
-
-      async.series(repackers, err => {
-        if (err) {
-          return callback({
-            message: 'Failed to repack dependencies'
-          });
-        }
-
-        callback(null);
-      });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 50, callback);
-    },
-    function(callback) {
       getOpennedFiles(pid, (err, opennedFiles) => {
-        if (err || !opennedFiles || !opennedFiles.opennedFiles) {
+        if (err || !opennedFiles || !opennedFiles.symlinks || !opennedFiles.opennedRegularFiles || !opennedFiles.opennedDirectories) {
           const errMsg = 'Failed to collect files that process openned';
           if (err) {
             err.message = err.message ? (err.message += `\n${errMsg}`) : errMsg;
@@ -624,22 +836,69 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
           });
         }
 
-        extraFiles = opennedFiles.opennedFiles;
+        symlinks = opennedFiles.symlinks;
+        opennedRegularFiles = opennedFiles.opennedRegularFiles;
+        opennedDirectories = opennedFiles. opennedDirectories;
         callback(null);
       });
     },
     function(callback) {
-      const copyExtraFiles = extraFiles.map(f => function(asyncCallback) {
-        shell(`cp -r ${f} ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
+      if (metadata.packagesSequence.length === 0) {
+        opennedRegularFiles.push(metadata.exe);
+      }
+
+      async.parallel(
+        metadata.entrypointArgs.map(a =>
+          asyncCallback => {
+            fs.lstat(a, (err, stats) => {
+              if (!err) {
+                if (stats.isDirectory()) {
+                  opennedDirectories.push(a);
+                } else if (stats.isFile()) {
+                  opennedRegularFiles.push(a);
+                }
+              }
+              asyncCallback(null);
+            });
+          }
+        ),
+        () => {
+          callback(null);
+        }
+      );
+    },
+    function(callback) {
+      const syncOpennedDirectories = opennedDirectories.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path}/ ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
           if (err) {
             return asyncCallback(err);
           }
 
           asyncCallback(null);
-        });
-      });
+        })
+      );
 
-      async.parallel(copyExtraFiles, err => {
+      const syncSymlinks = symlinks.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path} ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          asyncCallback(null);
+        })
+      );
+
+      const syncOpennedRegularFile = opennedRegularFiles.map(path => asyncCallback =>
+        shell(`rsync -avRW /.${path} ${extraFilesPath}`, CHECK_STDERR_FOR_ERROR, err => {
+          if (err) {
+            return asyncCallback(err);
+          }
+
+          asyncCallback(null);
+        })
+      );
+
+      async.series(syncOpennedDirectories.concat(syncOpennedRegularFile).concat(syncSymlinks), err => {
         if (err) {
           return callback({
             message: 'Failed to import files that process openned'
@@ -650,83 +909,38 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      shell(`cd ${packagePath} && ls | grep .deb`, CHECK_STDERR_FOR_ERROR, (err, stdout) => {
-        if (err) {
-          if (err.code && err.code === 1) {
-            return callback(null);
-          }
-          return callback({
-            message: 'Failed to gather repacked dependencies .deb files'
-          });
-        }
+      const multipleCommandsDelimiter = `; \\\n  `;
 
-        debFiles = splitTrimFilter(stdout);
-        callback(null);
-      });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 60, callback);
-    },
-    function(callback) {
-      const extraCopyInstructions = extraFiles
-        .map(f => ({
-          'src': `extraFiles/${last(f, '/')}`,
-          'dst': f
-        }));
+      const dockerfileContent = [
+        `FROM ${config.baseimage}`,
+        `COPY apt /apt`,
+        // `Run dpkg --purge apt`,
+        `RUN rm -rf /var/lib/apt/* || echo Failed to overwrite apt settings; \\`,
+        `  rm -rf /etc/apt/* || echo Failed to overwrite apt settings; \\`,
+        `  cp -rf /apt/varlib/. /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
+        `  cp -rf /apt/etc/. /etc/apt/. || echo Failed to overwrite apt settings;`,
+        `RUN apt-get update || echo 'apt-get update failed, installing anyway'`,
+        `RUN apt-get install --no-install-recommends --no-install-suggests -f -y --force-yes rsync strace ${metadata.packagesSequence.join(' ')}`,
+        `COPY extraFiles /extraFiles`,
+        opennedDirectories.length > 0 ? `RUN ${opennedDirectories.map(path => `rsync -avRW /extraFiles/.${path}/ / `).join(multipleCommandsDelimiter)}` : '',
+        opennedRegularFiles.length > 0 ? `RUN ${opennedRegularFiles.map(path => `rsync -avRW /extraFiles/.${path} / `).join(multipleCommandsDelimiter)}` : '',
+        symlinks.length > 0 ? `RUN ${symlinks.map(path => `rsync -avRW /extraFiles/.${path} / || echo Failed to import symlink`).join(multipleCommandsDelimiter)}` : '',
 
-      const copyInstructions = [
-        {
-          'src': 'workingDirectory',
-          'dst': '/workingDirectory'
-        },
-        {
-          'src': 'packages',
-          'dst': '/packages'
-        },
-        {
-          'src': 'workingDirectory/cmdScript.sh',
-          'dst': '/workingDirectory'
-        }
-      ].concat(extraCopyInstructions);
+        //Clean up and reduce image size
+        `RUN rm -rf /var/lib/apt/lists/*; \\`,
+        `  rm -rf /var/cache/apt/*; \\`,
+        `  rm -rf /apt; \\`,
+        `  rm -rf /extraFiles;`,
+        `COPY workingDirectory /workingDirectory`,
+        `RUN chmod +x /workingDirectory/cmdScript.sh`,
+        `WORKDIR workingDirectory`,
+        `EXPOSE ${port}`,
+        `CMD ["./cmdScript.sh"]`,
+      ].join('\n');
 
-      const runInstructions = [{
-        'command': 'chmod',
-        'args': ['+x', '/workingDirectory/cmdScript.sh']
-      }]
-        .concat(debFiles
-          .map(p => ({
-            'command': 'dpkg',
-            'args': ['-i','--force-depends',`/packages/${p}`,] //dependency graph took care of dependencies, so can force here
-          })));
+      logger.debug(dockerfileContent);
 
-      const dockerfileContent = {
-        'imagename': 'ubuntu',
-        'imageversion': '14.04',
-        'copy': copyInstructions,
-        'run': runInstructions,
-        'workdir': 'workingDirectory',
-        'expose': [port],
-        'cmd': {
-          'command': './cmdScript.sh'
-        }
-      };
-
-      dockerfileGen.generate(JSON.stringify(dockerfileContent), (err,result) => {
-        if (err) {
-          return callback({
-            message: 'Failed to generate Dockerfile'
-          });
-        }
-
-        dockerfile = result;
-        callback(null);
-      });
-    },
-    function(callback) {
-      setkeyv(keyv, progressKey, 70, callback);
-    },
-    function(callback) {
-      fs.writeFile(`${buildPath}/Dockerfile`, dockerfile, err => {
+      fs.writeFile(`${buildPath}/Dockerfile`, dockerfileContent, err => {
         if (err) {
           return callback({
             message: 'Failed to serialize Dockerfile'
@@ -737,11 +951,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      setkeyv(keyv, progressKey, 80, callback);
-    },
-    function(callback) {
       // issue: nginx: , causing docker tagging to fail
-      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')} .`, CHECK_STDERR_FOR_ERROR, err => {
+      shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')}${port} .`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
             message: 'Failed to build Docker image'
@@ -750,8 +961,19 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
+    },
+    function(callback) {
+      shell(`rm -rf ${buildPath}`, CHECK_STDERR_FOR_ERROR, err => {
+        if (err) {
+          return callback({
+            message: 'Failed to delete build path'
+          });
+        }
+
+        callback(null);
+      });
     }
-  ],
+  ]),
   function(err) {
     if (err) {
       return cb(err);

@@ -7,5 +7,6 @@
 	   "secret": "secret"
     },
     "baseimage": "baseimage",
-    "vmimage": "vmimage"
+    "vmimage": "vmimage",
+    "straceTimeoutInMinutes": 0.5
 }
