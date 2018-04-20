@@ -56,6 +56,43 @@ jobs:
     -
       <<: *aws_common
       <<: *dd_common
+      services:
+      - docker
+      before_script:
+      - sudo apt-get install nginx
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertnginx --timeout 600000 --exit
+      - sudo service nginx stop || echo service does not seem to be running
+      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - curl localhost:80
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertnginx.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      services:
+      - docker
+      before_script:
+      - sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv EA312927
+      - sudo echo 'deb http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.2 multiverse' | sudo tee /etc/apt/sources.list.d/mongodb-org-3.2.list
+      - sudo apt-get -y update
+      - sudo apt-get -y install mongodb-org
+      - yarn install
+      - npm run build
+      script:
+      - echo -e 'use testdb \n db.testDocument.insert({"a":"dataispreserved"}) \n ' | mongo --quiet
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertmongod --timeout 600000 --exit
+      - sudo service mongod stop || echo service does not seem to be running
+      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - echo 'db.stats().ok' | mongo
+      - echo -e 'use testdb \n db.testDocument.find() \n ' | mongo --quiet | grep dataispreserved
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertmongod.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
       install:
       - curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
       - sudo apt-get install -y nodejs
@@ -120,7 +157,18 @@ jobs:
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep wrongtokenschema --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-wrongtokenschema.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER      
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
+      - sudo apt-get install nginx
+      - yarn install
+      - npm run build
+      script:
+      - IGNORE_AUTH=TRUE sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep jwtignored --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-jwtignored.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER 
     -
       <<: *aws_common
       <<: *dd_common
@@ -142,43 +190,6 @@ jobs:
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep inspectnginx --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-inspectnginx.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
-    -
-      <<: *aws_common
-      <<: *dd_common
-      services:
-      - docker
-      before_script:
-      - sudo apt-get install nginx
-      - yarn install
-      - npm run build
-      script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertnginx --timeout 600000 --exit
-      - sudo service nginx stop || echo service does not seem to be running
-      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
-      - curl localhost:80
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertnginx.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
-    -
-      <<: *aws_common
-      <<: *dd_common
-      services:
-      - docker
-      before_script:
-      - sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv EA312927
-      - sudo echo 'deb http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.2 multiverse' | sudo tee /etc/apt/sources.list.d/mongodb-org-3.2.list
-      - sudo apt-get -y update
-      - sudo apt-get -y install mongodb-org
-      - yarn install
-      - npm run build
-      script:
-      - echo -e 'use testdb \n db.testDocument.insert({"a":"dataispreserved"}) \n ' | mongo --quiet
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertmongod --timeout 600000 --exit
-      - sudo service mongod stop || echo service does not seem to be running
-      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
-      - echo 'db.stats().ok' | mongo
-      - echo -e 'use testdb \n db.testDocument.find() \n ' | mongo --quiet | grep dataispreserved
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertmongod.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
