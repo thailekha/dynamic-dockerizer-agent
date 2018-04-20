@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 
-// find daemons and zombies: ps axo pid,ppid,pgrp,tty,tpgid,sess,comm |awk '$2==1' |awk '$1==$3'
-// maybe put a & and parse everything upto exit_group, then kill after that :)
-// strace -fe open service mongod start
-
 import http from 'http';
 import express from 'express';
 import cors from 'cors';

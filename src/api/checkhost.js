@@ -43,14 +43,13 @@ export function checkhostHandler() {
             osMsg = `Host OS validated, ${JSON.stringify(os)}`;
           } else {
             osMsg = `This project has been tested on Ubuntu trusty only. The detected release is ${JSON.stringify(os)}, so use this project at your own risk`;
-            // res.status(501).json({message});
           }
           callback(null);
         });
       },
       function(callback) {
-        exec(`dpkg-query -W rsync build-essential apt-rdepends docker`, (code, _, stderr) => {
-          if ( !(code === 0 || code === 1) || stderr ) {
+        exec(`dpkg-query -W rsync build-essential apt-rdepends docker`, code => {
+          if ( !(code === 0 || code === 1) ) {
             return callback({
               message: 'Failed to validate required packages'
             });
