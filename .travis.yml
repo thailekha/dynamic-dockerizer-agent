@@ -64,7 +64,7 @@ jobs:
       - yarn install
       - npm run build
       script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --grep checkhost --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
@@ -74,7 +74,7 @@ jobs:
       - yarn install
       - npm run build
       script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --grep checkhost --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
@@ -85,7 +85,7 @@ jobs:
       - yarn install
       - npm run build
       script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/progress.test.js --timeout 20000 --exit
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/progress.test.js --grep progress --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
