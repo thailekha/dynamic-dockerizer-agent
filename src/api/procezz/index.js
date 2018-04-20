@@ -803,7 +803,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     },
     function(callback) {
       const mainCommand = `${metadata.packagesSequence.length === 0 ? metadata.exe : metadata.entrypointCmd}`;
-      const straceCommand = `strace -o /dev/null -fe trace=process ${mainCommand} ${metadata.entrypointArgs.join(' ')} && echo strace attach ${pidCommand(mainCommand, false)} && strace -o /dev/null -fe trace=process ${pidCommand(mainCommand, false)}`;
+      const straceCommand = `cd ${metadata.cwd} && strace -o /dev/null -fe trace=process ${mainCommand} ${metadata.entrypointArgs.join(' ')} && echo strace attach ${pidCommand(mainCommand, false)} && strace -o /dev/null -fe trace=process ${pidCommand(mainCommand, false)}`;
       const runScriptContent = `#!/bin/bash\n${straceCommand}`;
 
       logger.debug(`Runscript: ${runScriptContent}`);
@@ -925,7 +925,7 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
         opennedDirectories.length > 0 ? `RUN ${opennedDirectories.map(path => `rsync -avRW /extraFiles/.${path}/ / `).join(multipleCommandsDelimiter)}` : '',
         opennedRegularFiles.length > 0 ? `RUN ${opennedRegularFiles.map(path => `rsync -avRW /extraFiles/.${path} / `).join(multipleCommandsDelimiter)}` : '',
         symlinks.length > 0 ? `RUN ${symlinks.map(path => `rsync -avRW /extraFiles/.${path} / || echo Failed to import symlink`).join(multipleCommandsDelimiter)}` : '',
-
+        `RUN mkdir -p ${metadata.cwd}`,
         //Clean up and reduce image size
         `RUN rm -rf /var/lib/apt/lists/*; \\`,
         `  rm -rf /var/cache/apt/*; \\`,
