@@ -18,7 +18,6 @@ function pidCommand(command, escapeDollarSign = true) {
 
 export function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
   exec('netstat --tcp --listening --numeric --program | awk \'{print $4,$7}\'', {silent:true}, (code, stdout, stderr) => {
-    // if terraform command time out, no response is returned by express, why?
     if (code !== 0 || stderr) {
       return cb({
         message: 'Failed to gather processes listening on network'
@@ -35,7 +34,7 @@ export function parseNetstat(IGNORED_PORTS, IGNORED_PROGRAMS, processId, cb) {
     const processes = stdout
       .split('\n')
       .filter(i => hasAll(i,[':','/']) && hasEither(i,['0.0.0.0','127.0.0.1','::']) && i.split(' ').length === 2)
-      .map(i => (i.indexOf('::') > -1 ? i.replace('::', '0.0.0.0') : i) ) //hacky, change later
+      .map(i => (i.indexOf('::') > -1 ? i.replace('::', '0.0.0.0') : i) )
       .map(i => {
         var socketAndProcess = i.split(' ');
         return {
@@ -534,7 +533,6 @@ function getOpennedFiles(pid, cb) {
           .filter(line => line.indexOf('("') > -1 && line.indexOf('= -1') < 0)
           .map(line => line.split(`"`))
           .filter(lineParts => lineParts.length > 1 && (match ? syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length > 0 : syscalls.filter(sc => lineParts[0].indexOf(sc) > -1).length === 0))
-        // .filter(lineParts => lineParts.length > 1)
           .map(line => line[1])
           .filter(path => IGNORED_PATHS.filter(ignored => path.indexOf(ignored) === 0).length === 0)
           .filter(path => '/tmp' !== path); //edge case
@@ -917,7 +915,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       const dockerfileContent = [
         `FROM ${config.baseimage}`,
         `COPY apt /apt`,
-        // `Run dpkg --purge apt`,
         `RUN rm -rf /var/lib/apt/* || echo Failed to overwrite apt settings; \\`,
         `  rm -rf /etc/apt/* || echo Failed to overwrite apt settings; \\`,
         `  cp -rf /apt/varlib/. /var/lib/apt/. || echo Failed to overwrite apt settings; \\`,
@@ -954,7 +951,6 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
       });
     },
     function(callback) {
-      // issue: nginx: , causing docker tagging to fail
       shell(`cd ${buildPath} && docker build -t dd-agent/${program.replace(/\W/g, '')}${port} .`, CHECK_STDERR_FOR_ERROR, err => {
         if (err) {
           return callback({
