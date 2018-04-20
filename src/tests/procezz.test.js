@@ -54,6 +54,38 @@ describe('notoken', function() {
   });
 });
 
+describe('wrongtoken', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .set('Authorization', `Bearer somethingwrong`)
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
+describe('wrongtokenschema', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .set('Authorization', `wrong schema`)
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
 describe('listnginx', function() {
   before(constructBefore([startService('nginx'),waitForServer]));
 
@@ -98,6 +130,7 @@ describe('inspectnginx', function() {
         request(app)
           .get(`/processes/${pid}`)
           .set('Authorization', `Bearer ${token}`)
+          .set('x-dd-progress', 'foo123')
           .expect(200)
           .expect('Content-Type', /json/)
           .end(function(err, res) {
