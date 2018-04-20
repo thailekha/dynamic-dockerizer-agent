@@ -65,7 +65,7 @@ jobs:
       - npm run build
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --grep checkhost --timeout 20000 --exit
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-checkhost.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
@@ -75,7 +75,7 @@ jobs:
       - npm run build
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --grep checkhost --timeout 20000 --exit
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-checkhost.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
@@ -86,7 +86,7 @@ jobs:
       - npm run build
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/progress.test.js --grep progress --timeout 20000 --exit
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-progress.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
@@ -183,7 +183,7 @@ jobs:
       install:
       - npm i -g codecov istanbul-combine
       script:
-      - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-foo.json
+      - istanbul-combine -d coverage -p summary -r text -r lcov ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json ~/$TRAVIS_BUILD_NUMBER/coverage-progress.json ~/$TRAVIS_BUILD_NUMBER/coverage-checkhost.json
       - ls coverage
       - cp coverage/lcov.info coverage.lcov
       - cp coverage/lcov.info ~/$TRAVIS_BUILD_NUMBER/lcov.info
