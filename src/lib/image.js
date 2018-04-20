@@ -17,7 +17,7 @@ export function listImages(cb) {
   });
 }
 
-export function pullImage(name, tag, cb) {
+function pullImage(name, tag, cb) {
   if (tag === '') {
     tag = 'latest';
   }
@@ -34,7 +34,7 @@ export function pullImage(name, tag, cb) {
   });
 }
 
-export function tagImage(id, tag, cb) {
+function tagImage(id, tag, cb) {
   if (tag === '') {
     tag = 'latest';
   }
@@ -92,8 +92,8 @@ export function prepareBaseImage(cb) {
         return callback(null);
       }
 
-      pullImage(imageToPull.name, imageToPull.tag, err => {
-        if (err) {
+      pullImage(imageToPull.name, imageToPull.tag, (err, output) => {
+        if (err || output === null) {
           return callback(err);
         }
         callback(null);
@@ -115,8 +115,8 @@ export function prepareBaseImage(cb) {
           return callback('Error: could not tag the base image');
         }
 
-        tagImage(foundImageToTag[0].Id, {repo: config.baseimage, tag: 'latest'}, err => {
-          if (err) {
+        tagImage(foundImageToTag[0].Id, {repo: config.baseimage, tag: 'latest'}, (err, output) => {
+          if (err || output === null) {
             return callback(err);
           }
 

@@ -528,11 +528,6 @@ function getOpennedFiles(pid, cb) {
       }, 1000 * 60 * config.straceTimeoutInMinutes);
     },
     function(callback) {
-      logger.info('Restarting the process');
-      exec(`cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`, {silent:true, async:true});
-      callback(null);
-    },
-    function(callback) {
       const straceParser = (syscalls, match = true) =>
         traceOutput
           .split(`\n`)
@@ -668,6 +663,7 @@ function getOpennedFiles(pid, cb) {
       symlinks: _.uniq(symlinks),
       opennedRegularFiles: _.uniq(opennedRegularFiles),
       opennedDirectories: _.uniq(opennedDirectories),
+      restartCmd: `cd ${procfs.cwd} && ${procfs.entrypointCmd} ${(procfs.entrypointArgs).join(' ')} &`
     });
   });
 }
@@ -739,7 +735,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
     , extraFilesPath
     , symlinks
     , opennedRegularFiles
-    , opennedDirectories;
+    , opennedDirectories
+    , restartCmd;
 
   async.series(injectSetkeyv(keyv, progressKey,[
     function(callback) {
@@ -838,7 +835,8 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         symlinks = opennedFiles.symlinks;
         opennedRegularFiles = opennedFiles.opennedRegularFiles;
-        opennedDirectories = opennedFiles. opennedDirectories;
+        opennedDirectories = opennedFiles.opennedDirectories;
+        restartCmd = opennedFiles.restartCmd;
         callback(null);
       });
     },
@@ -907,6 +905,11 @@ export function convert(keyv, progressKey, IGNORED_PORTS, IGNORED_PROGRAMS, pid,
 
         callback(null);
       });
+    },
+    function(callback) {
+      logger.info('Restarting the process');
+      exec(restartCmd, {silent:true, async:true});
+      callback(null);
     },
     function(callback) {
       const multipleCommandsDelimiter = `; \\\n  `;

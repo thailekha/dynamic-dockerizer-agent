@@ -6,11 +6,6 @@ const DEBUG = VERBOSE >= 2;
 const INFO = VERBOSE >= 1;
 
 export const logger = {
-  overview: function(msg, extraCondition = true) {
-    if (extraCondition) {
-      console.log(`===> OVERVIEW: ${msg}`); // eslint-disable-line
-    }
-  },
   info: function(msg, extraCondition = true) {
     if (INFO && extraCondition) {
       console.log(`===> INFO: ${msg}`); // eslint-disable-line
