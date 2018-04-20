@@ -1,6 +1,6 @@
 {
   "name": "dynamic-dockerizer-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Agent component of Dynamic Dockerizer",
   "main": "dist",
   "scripts": {
