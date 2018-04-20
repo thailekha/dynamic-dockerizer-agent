@@ -188,6 +188,47 @@ describe('convertmongod', function() {
   });
 });
 
+describe('convertnopackage', function() {
+  let pid;
+
+  before(constructBefore([waitForServer]));
+
+  it('should convert TCP process that does not require any package to Docker image', done => {
+    async.series([
+      function(callback) {
+        request(app)
+          .get('/processes')
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200)
+          .expect('Content-Type', /json/)
+          .end(function(err, res) {
+            expect(err).to.be.null;
+            const filterredPrograms = res.body.processes.filter(({port}) => port === '7999');
+            assert.equal(1, filterredPrograms.length);
+            pid = filterredPrograms[0].pid;
+            expect(pid).to.not.be.undefined;
+            callback(null);
+          });
+      },
+      function(callback) {
+        request(app)
+          .get(`/processes/${pid}/convert`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200)
+          .expect('Content-Type', /json/)
+          .end(function(err) {
+            expect(err).to.be.null;
+            callback(null);
+          });
+      }
+    ],
+    function(err) {
+      expect(err).to.not.be.undefined;
+      done();
+    });
+  });
+});
+
 describe('inspectunexistedprocess', function() {
   before(constructBefore([waitForServer]));
 

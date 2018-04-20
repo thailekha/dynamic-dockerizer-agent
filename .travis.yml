@@ -59,6 +59,25 @@ jobs:
       services:
       - docker
       before_script:
+      - sudo cp $(sudo which node) ~/.
+      - cp ./assets/index.js ~/.
+      - sudo ~/node ~/index.js &
+      - yarn install
+      - npm run build
+      script:
+      - curl localhost:7999
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertnopackage --timeout 600000 --exit
+      - sudo kill $(sudo lsof -ti tcp:7999)
+      - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - curl localhost:7999
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertnopackage.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      services:
+      - docker
+      before_script:
       - sudo apt-get install nginx
       - yarn install
       - npm run build
