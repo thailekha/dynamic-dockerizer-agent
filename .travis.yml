@@ -23,7 +23,7 @@ jobs:
     # =======================
     # Code quality scans (start)
     # =======================
-    - stage: Code quality, unit tests, e2e tests
+    - stage: Code quality and tests
       if: type IN (push)
       dist: trusty
       language: bash
@@ -53,6 +53,30 @@ jobs:
     # =======================
     # E2E tests (start)
     # =======================
+    -
+      <<: *aws_common
+      <<: *dd_common
+      install:
+      - curl -sL https://deb.nodesource.com/setup_6.x | sudo -E bash -
+      - sudo apt-get install -y nodejs
+      - sudo npm install -g yarn
+      before_script:
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      before_script:
+      - yarn install
+      - npm run build
+      script:
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     -
       <<: *aws_common
       <<: *dd_common
@@ -142,16 +166,6 @@ jobs:
       - npm run build
       script:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep inspectunexistedprocess --timeout 20000 --exit
-      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
-      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
-    -
-      <<: *aws_common
-      <<: *dd_common
-      before_script:
-      - yarn install
-      - npm run build
-      script:
-      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/checkhost.test.js --timeout 20000 --exit
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
     # =======================
