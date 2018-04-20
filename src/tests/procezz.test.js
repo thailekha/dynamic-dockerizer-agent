@@ -39,6 +39,21 @@ function constructBefore(asyncFunctions) {
   };
 }
 
+describe('notoken', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
 describe('listnginx', function() {
   before(constructBefore([startService('nginx'),waitForServer]));
 

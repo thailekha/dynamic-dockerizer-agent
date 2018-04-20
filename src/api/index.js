@@ -2,7 +2,7 @@ import { procezzHandler } from './procezz';
 import { checkhostHandler } from './checkhost';
 import progress from './progress';
 import Keyv from 'keyv';
-import errorHandler from './error';
+import errorHandler from './errorHandler';
 
 const keyv = new Keyv();
 
