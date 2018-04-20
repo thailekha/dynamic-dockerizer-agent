@@ -39,21 +39,6 @@ function constructBefore(asyncFunctions) {
   };
 }
 
-describe('notoken', function() {
-  before(constructBefore([startService('nginx'),waitForServer]));
-
-  it('should get unauthorized error', done => {
-    request(app)
-      .get('/processes')
-      .expect(401)
-      .expect('Content-Type', /json/)
-      .end(function(err, res) {
-        expect(res.body.processes).to.be.undefined;
-        done();
-      });
-  });
-});
-
 describe('listnginx', function() {
   before(constructBefore([startService('nginx'),waitForServer]));
 
@@ -98,6 +83,7 @@ describe('inspectnginx', function() {
         request(app)
           .get(`/processes/${pid}`)
           .set('Authorization', `Bearer ${token}`)
+          .set('x-dd-progress', 'foo123')
           .expect(200)
           .expect('Content-Type', /json/)
           .end(function(err, res) {
@@ -213,6 +199,70 @@ describe('inspectunexistedprocess', function() {
       .expect('Content-Type', /json/)
       .end(function(err) {
         expect(err).to.not.be.null;
+        done();
+      });
+  });
+});
+
+describe('notoken', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
+describe('wrongtoken', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .set('Authorization', `Bearer somethingwrong`)
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
+describe('wrongtokenschema', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should get unauthorized error', done => {
+    request(app)
+      .get('/processes')
+      .set('Authorization', `wrong schema`)
+      .expect(401)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(res.body.processes).to.be.undefined;
+        done();
+      });
+  });
+});
+
+describe('jwtignored', function() {
+  before(constructBefore([startService('nginx'),waitForServer]));
+
+  it('should list TCP processes including nginx without using jwt token', done => {
+    request(app)
+      .get('/processes')
+      .expect(200)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        expect(err).to.be.null;
+        const filterredPrograms = res.body.processes.filter(({program}) => program === 'nginx');
+        assert.equal(1, filterredPrograms.length);
         done();
       });
   });
