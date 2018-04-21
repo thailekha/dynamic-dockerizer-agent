@@ -86,6 +86,7 @@ jobs:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertnginx --timeout 600000 --exit
       - sudo service nginx stop || echo service does not seem to be running
       - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - sleep 3
       - curl localhost:80
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertnginx.json
       - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
@@ -106,6 +107,7 @@ jobs:
       - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertmongod --timeout 600000 --exit
       - sudo service mongod stop || echo service does not seem to be running
       - docker images -a | grep "dd-agent" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - sleep 3
       - echo 'db.stats().ok' | mongo
       - echo -e 'use testdb \n db.testDocument.find() \n ' | mongo --quiet | grep dataispreserved
       - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertmongod.json
