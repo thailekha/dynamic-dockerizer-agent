@@ -188,6 +188,74 @@ describe('convertmongod', function() {
   });
 });
 
+describe('convertnginxmongod', function() {
+  let nginxPid, mongodPid;
+
+  before(constructBefore([startService('mongod'),startService('nginx'),waitForServer]));
+
+  it('should convert mongod and nginx to Docker images in parallel', done => {
+    async.series([
+      function(callback) {
+        request(app)
+          .get('/processes')
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200)
+          .expect('Content-Type', /json/)
+          .end(function(err, res) {
+            expect(err).to.be.null;
+
+            const filterredNginx = res.body.processes.filter(({program}) => program === 'nginx');
+            const filterredMongod = res.body.processes.filter(({program}) => program === 'mongod');
+
+            assert.equal(1, filterredNginx.length);
+            assert.equal(1, filterredMongod.length);
+
+            nginxPid = filterredNginx[0].pid;
+            mongodPid = filterredMongod[0].pid;
+
+            expect(nginxPid).to.not.be.undefined;
+            expect(mongodPid).to.not.be.undefined;
+
+            callback(null);
+          });
+      },
+      function(callback) {
+        async.parallel([
+          asyncCallback => {
+            request(app)
+              .get(`/processes/${nginxPid}/convert`)
+              .set('Authorization', `Bearer ${token}`)
+              .expect(200)
+              .expect('Content-Type', /json/)
+              .end(function(err) {
+                expect(err).to.be.null;
+                asyncCallback(null);
+              });
+          },
+          asyncCallback => {
+            request(app)
+              .get(`/processes/${mongodPid}/convert`)
+              .set('Authorization', `Bearer ${token}`)
+              .expect(200)
+              .expect('Content-Type', /json/)
+              .end(function(err) {
+                expect(err).to.be.null;
+                asyncCallback(null);
+              });
+          }
+        ], function(err) {
+          expect(err).to.not.be.undefined;
+          callback(null);
+        });
+      }
+    ],
+    function(err) {
+      expect(err).to.not.be.undefined;
+      done();
+    });
+  });
+});
+
 describe('convertnopackage', function() {
   let pid;
 
