@@ -79,6 +79,41 @@ jobs:
       services:
       - docker
       before_script:
+      - sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv EA312927
+      - sudo echo 'deb http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.2 multiverse' | sudo tee /etc/apt/sources.list.d/mongodb-org-3.2.list
+      - sudo apt-get -y update
+      - sudo apt-get -y install mongodb-org
+      - sudo apt-get install nginx
+      - cd / && sudo tar -c --exclude=mnt --exclude=sys --exclude=proc --exclude=dev --exclude=var/lib/docker . | docker import - vmimage
+      - cd -
+      - yarn install
+      - npm run build
+      script:
+      - echo -e 'use testdb \n db.testDocument.insert({"a":"dataispreserved"}) \n ' | mongo --quiet
+
+      - sudo ./node_modules/.bin/nyc --reporter=json --reporter=lcov --reporter=text ./node_modules/.bin/_mocha ./dist/tests/procezz.test.js --grep convertnginxmongod --timeout 600000 --exit
+
+      - sudo service mongod stop || echo mongod does not seem to be running
+      - sudo service nginx stop || echo nginx does not seem to be running
+
+      - docker images -a | grep "dd-agent/nginx80" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+      - docker images -a | grep "dd-agent/mongod27017" | awk '{print $3}' | xargs docker run --network=host --privileged -d
+
+      - sleep 3
+
+      - echo 'db.stats().ok' | mongo
+      - echo -e 'use testdb \n db.testDocument.find() \n ' | mongo --quiet | grep dataispreserved
+
+      - curl localhost:80
+
+      - sudo mv coverage/coverage-final.json ~/$TRAVIS_BUILD_NUMBER/coverage-procezz-convertnginxmongod.json
+      - aws s3 sync ~/$TRAVIS_BUILD_NUMBER s3://dd-cicd/agent/$TRAVIS_BUILD_NUMBER
+    -
+      <<: *aws_common
+      <<: *dd_common
+      services:
+      - docker
+      before_script:
       - sudo apt-get install nginx
       - yarn install
       - npm run build
