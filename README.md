@@ -20,5 +20,10 @@ sudo npm run dev
 ```
 *Commands for running **tests** can be found in .travis.yml. However, it is not recommended to run them locally*
 
+## Notices
+- The codebase has been tested against ubuntu trusty on travis
+- For best results, before converting any process, please make sure `sudo apt-get update` does not output any error
+- Timout for waiting for tracing opened files can be configured in `src/config.json` at the `straceTimeoutInMinutes` key
+
 ## Documentation
 The API is documented in Swagger which can be found at `http://<hostname>:8081/docs`
