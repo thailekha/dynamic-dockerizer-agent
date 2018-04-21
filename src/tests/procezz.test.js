@@ -188,7 +188,7 @@ describe('convertmongod', function() {
   });
 });
 
-describe('convertnginxmongod', function() {
+describe('convertbothnginxmongod', function() {
   let nginxPid, mongodPid;
 
   before(constructBefore([startService('mongod'),startService('nginx'),waitForServer]));
