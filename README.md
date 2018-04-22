@@ -5,6 +5,7 @@
 
 ## Usage
 Make sure the following programs are available on the host: **docker, rsync, build-essential, apt-rdepends**
+
 Create development environment (Vagrant and Virtualbox required, modify `config.vm.synced_folder` in Vagrantfile to suit your host first):
 ```
 vagrant up devbox
